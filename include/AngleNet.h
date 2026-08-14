@@ -35,8 +35,12 @@ private:
 
     const float meanValues[3] = {127.5, 127.5, 127.5};
     const float normValues[3] = {1.0 / 127.5, 1.0 / 127.5, 1.0 / 127.5};
-    const int dstWidth = 192;
-    const int dstHeight = 48;
+    // ch_PP-LCNet_x0_25_textline_ori_cls_mobile (PP-OCRv5, reused for the
+    // PP-OCRv6 pipeline since no v6-specific orientation classifier is
+    // published) expects 80x160 (HxW) input, unlike the PP-OCRv3/v4
+    // angle-cls model's 48x192.
+    const int dstWidth = 160;
+    const int dstHeight = 80;
 
     Angle getAngle(cv::Mat &src);
 };

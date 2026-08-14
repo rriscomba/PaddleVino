@@ -28,11 +28,12 @@ jobs:
       - name: Cache vcpkg installed packages
         uses: actions/cache@v4
         with:
-          path: |
-            C:/vcpkg/installed
-            C:/vcpkg/buildtrees
-            C:/vcpkg/downloads
-          key: vcpkg-opencv-x64-windows-${{ runner.os }}-v1
+          # Only cache the built package tree, not buildtrees/downloads:
+          # those intermediate artifacts are several GB for an OpenCV build
+          # and were pushing the cache past GitHub's per-repo size cap,
+          # causing eviction and a full rebuild on every run.
+          path: C:/vcpkg/installed
+          key: vcpkg-opencv-x64-windows-${{ runner.os }}-v2
 
       - name: Install OpenCV via vcpkg
         shell: pwsh
