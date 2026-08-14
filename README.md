@@ -69,6 +69,7 @@ paddlevino.exe --input scan.png --format reading
 | `--unclip-ratio <f>` | Detection box expansion ratio | `1.6` |
 | `--no-angle` | Disable the angle classification model | angle enabled |
 | `--no-most-angle` | Disable "most probable angle" voting | enabled |
+| `--reading-row-overlap <f>` | `--format reading` row-clustering threshold (see below) | `0.5` |
 | `--version`, `-v` | Print version and exit | — |
 | `--help`, `-h` | Print usage and exit | — |
 
@@ -102,10 +103,18 @@ document.
 detections: the first line is the image's average confidence (e.g.
 `confidence=96.83%`), and every line after that is plain text with no boxes,
 scores, or per-line labels. Text runs are re-flowed into rows by clustering
-boxes that overlap vertically by more than half of the shorter box's height,
-ordering rows top-to-bottom, and ordering runs left-to-right within a row —
-so a label and its value on the same printed line come back on the same
-output line, two spaces apart.
+boxes whose vertical spans have an intersection-over-union above
+`--reading-row-overlap` (default `0.5`), ordering rows top-to-bottom, and
+ordering runs left-to-right within a row — so a label and its value on the
+same printed line come back on the same output line, two spaces apart.
+
+This clustering is a heuristic, not a guarantee: dense small text (e.g. a
+digital-signature stamp block) has less pixel margin between physical
+lines relative to the detector's own box-height jitter, so it's more prone
+to lines being merged or split incorrectly than normal body text. If you
+see that, tune `--reading-row-overlap` — raise it (e.g. `0.6`-`0.7`) if
+unrelated lines are being merged, lower it (e.g. `0.3`-`0.4`) if runs that
+belong on the same line are staying split — and re-run.
 
 PDF input is out of scope for this tool (the base engine has no PDF
 support); rasterize pages to images first if you need that. This may be

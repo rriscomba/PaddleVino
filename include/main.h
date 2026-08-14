@@ -39,7 +39,14 @@ static const char *optionalMsg =
     "  --box-thresh <f>       Detection binarization threshold (default: 0.3)\n"
     "  --unclip-ratio <f>     Detection box expansion ratio (default: 1.6)\n"
     "  --no-angle             Disable the angle classification model\n"
-    "  --no-most-angle        Disable \"most probable angle\" voting\n";
+    "  --no-most-angle        Disable \"most probable angle\" voting\n"
+    "  --reading-row-overlap <f>  --format reading row-clustering threshold:\n"
+    "                         minimum vertical-span IoU for two text runs to be\n"
+    "                         merged onto the same output line. Raise it (e.g.\n"
+    "                         0.6-0.7) if unrelated lines are getting merged;\n"
+    "                         lower it (e.g. 0.3-0.4) if runs on the same line\n"
+    "                         (common with small/dense text) are staying split\n"
+    "                         (default: 0.5)\n";
 
 static const char *otherMsg =
     "  --version, -v           Print version and exit\n"
