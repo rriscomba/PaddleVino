@@ -30,8 +30,11 @@ private:
     std::vector<Ort::AllocatedStringPtr> inputNamesPtr;
     std::vector<Ort::AllocatedStringPtr> outputNamesPtr;
 
-    const float meanValues[3] = {0.485 * 255, 0.456 * 255, 0.406 * 255};
-    const float normValues[3] = {1.0 / 0.229 / 255.0, 1.0 / 0.224 / 255.0, 1.0 / 0.225 / 255.0};
+    // The bundled PP-OCRv6 det model (see RapidOCR's config.yaml, Det block,
+    // ocr_version: PP-OCRv6) uses simple (pixel/255 - 0.5)/0.5 normalization,
+    // not the ImageNet mean/std the PP-OCRv3/v4 det model used.
+    const float meanValues[3] = {127.5, 127.5, 127.5};
+    const float normValues[3] = {1.0 / 127.5, 1.0 / 127.5, 1.0 / 127.5};
 };
 
 
