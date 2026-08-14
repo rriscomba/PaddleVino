@@ -1,0 +1,42 @@
+#ifndef __PADDLEVINO_MAIN_H__
+#define __PADDLEVINO_MAIN_H__
+
+// CLI usage/help text for the paddlevino executable.
+// Long-flag, JSON-friendly interface. See README.md for full documentation.
+
+static const char *usageMsg =
+    "paddlevino --input <file|dir> [options]\n";
+
+static const char *examplesMsg =
+    "Examples:\n"
+    "  paddlevino.exe --input imagen.png --engine openvino --output resultado.json\n"
+    "  paddlevino.exe --input carpeta\\ --recursive --format json\n"
+    "  paddlevino --input photo.jpg --format txt\n";
+
+static const char *requiredMsg =
+    "  --input <path>        Image file or a directory of images (required)\n";
+
+static const char *optionalMsg =
+    "  --recursive            When --input is a directory, search it recursively\n"
+    "  --output <path>        Write results to this file instead of stdout\n"
+    "  --format json|txt      Output format (default: json)\n"
+    "  --engine cpu|openvino  Execution backend (default: cpu)\n"
+    "  --models-dir <dir>     Directory containing the model files (default: models)\n"
+    "  --det <file>           Detection model file name (default: det.onnx)\n"
+    "  --cls <file>           Angle classification model file name (default: cls.onnx)\n"
+    "  --rec <file>           Recognition model file name (default: rec.onnx)\n"
+    "  --keys <file>          Character dictionary file name (default: ppocrv6_dict.txt)\n"
+    "  --threads <int>        ONNX Runtime thread count (default: 4)\n"
+    "  --padding <int>        Border padding added to input images (default: 50)\n"
+    "  --max-side-len <int>   Resize long side to this value, 0 = no resize (default: 1024)\n"
+    "  --box-score-thresh <f> Detection box score threshold (default: 0.5)\n"
+    "  --box-thresh <f>       Detection binarization threshold (default: 0.3)\n"
+    "  --unclip-ratio <f>     Detection box expansion ratio (default: 1.6)\n"
+    "  --no-angle             Disable the angle classification model\n"
+    "  --no-most-angle        Disable \"most probable angle\" voting\n";
+
+static const char *otherMsg =
+    "  --version, -v           Print version and exit\n"
+    "  --help, -h              Print this help and exit\n";
+
+#endif //__PADDLEVINO_MAIN_H__

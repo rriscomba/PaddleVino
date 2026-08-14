@@ -1,0 +1,98 @@
+name: Build Windows CLI
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      model_tier:
+        description: "PP-OCRv6 model tier to bundle (tiny/small/medium)"
+        required: false
+        default: "small"
+
+permissions:
+  contents: write
+
+env:
+  ONNXRUNTIME_VERSION: "1.29.0"
+  MODEL_TIER: ${{ github.event.inputs.model_tier || 'small' }}
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Cache vcpkg installed packages
+        uses: actions/cache@v4
+        with:
+          path: |
+            C:/vcpkg/installed
+            C:/vcpkg/buildtrees
+            C:/vcpkg/downloads
+          key: vcpkg-opencv-x64-windows-${{ runner.os }}-v1
+
+      - name: Install OpenCV via vcpkg
+        shell: pwsh
+        run: |
+          C:\vcpkg\vcpkg.exe install opencv4:x64-windows
+
+      - name: Download ONNX Runtime (CPU, official release)
+        shell: pwsh
+        run: |
+          $ver = $env:ONNXRUNTIME_VERSION
+          $url = "https://github.com/microsoft/onnxruntime/releases/download/v$ver/onnxruntime-win-x64-$ver.zip"
+          Write-Host "Downloading $url"
+          Invoke-WebRequest -Uri $url -OutFile onnxruntime.zip
+          Expand-Archive -Path onnxruntime.zip -DestinationPath third_party_extract
+          Move-Item "third_party_extract/onnxruntime-win-x64-$ver" third_party/onnxruntime
+
+      - name: Download PP-OCRv6 models
+        shell: pwsh
+        run: |
+          powershell -ExecutionPolicy Bypass -File models/download_models.ps1 -Tier $env:MODEL_TIER
+
+      - name: Configure (CMake)
+        shell: pwsh
+        run: |
+          cmake -S . -B build -A x64 `
+            -DCMAKE_BUILD_TYPE=Release `
+            -DCMAKE_TOOLCHAIN_FILE=C:/vcpkg/scripts/buildsystems/vcpkg.cmake `
+            -DVCPKG_TARGET_TRIPLET=x64-windows `
+            -DONNXRUNTIME_ROOTDIR="${{ github.workspace }}/third_party/onnxruntime"
+
+      - name: Build (Release)
+        shell: pwsh
+        run: |
+          cmake --build build --config Release -j
+
+      - name: Stage package
+        shell: pwsh
+        run: |
+          $pkg = "dist/paddlevino"
+          New-Item -ItemType Directory -Force -Path $pkg | Out-Null
+          Copy-Item build/Release/paddlevino.exe $pkg/
+          Copy-Item build/Release/*.dll $pkg/ -ErrorAction SilentlyContinue
+          Copy-Item C:/vcpkg/installed/x64-windows/bin/*.dll $pkg/ -ErrorAction SilentlyContinue
+          New-Item -ItemType Directory -Force -Path "$pkg/models" | Out-Null
+          Copy-Item models/*.onnx "$pkg/models/" -ErrorAction SilentlyContinue
+          Copy-Item models/ppocrv6_dict.txt "$pkg/models/" -ErrorAction SilentlyContinue
+          Copy-Item README.md $pkg/ -ErrorAction SilentlyContinue
+          Copy-Item CHANGELOG.md $pkg/ -ErrorAction SilentlyContinue
+          Copy-Item LICENSE $pkg/ -ErrorAction SilentlyContinue
+          Compress-Archive -Path "$pkg/*" -DestinationPath "dist/paddlevino-windows-x64.zip" -Force
+
+      - name: Upload build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: paddlevino-windows-x64
+          path: dist/paddlevino-windows-x64.zip
+
+      - name: Create GitHub Release
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/paddlevino-windows-x64.zip
+          generate_release_notes: true
