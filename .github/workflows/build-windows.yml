@@ -15,7 +15,16 @@ permissions:
   contents: write
 
 env:
-  ONNXRUNTIME_VERSION: "1.29.0"
+  # Intel's official NuGet package ships a prebuilt ONNX Runtime with the
+  # OpenVINO execution provider actually compiled in (plus the OpenVINO
+  # runtime DLLs it depends on, bundled inside the package) - the same
+  # binaries the `onnxruntime-openvino` Python wheel installs under the
+  # hood, just distributed via NuGet instead of PyPI. It also ships the
+  # plain CPU execution provider, so it replaces the separate CPU-only
+  # ONNX Runtime download entirely: one dependency, both --engine values
+  # actually work.
+  ORT_OPENVINO_PACKAGE: "intel.ml.onnxruntime.openvino"
+  ORT_OPENVINO_VERSION: "1.24.1"
   MODEL_TIER: ${{ github.event.inputs.model_tier || 'small' }}
 
 jobs:
@@ -40,16 +49,36 @@ jobs:
         run: |
           C:\vcpkg\vcpkg.exe install opencv4:x64-windows
 
-      - name: Download ONNX Runtime (CPU, official release)
+      - name: Download ONNX Runtime (OpenVINO EP, Intel NuGet package)
         shell: pwsh
         run: |
-          $ver = $env:ONNXRUNTIME_VERSION
-          $url = "https://github.com/microsoft/onnxruntime/releases/download/v$ver/onnxruntime-win-x64-$ver.zip"
+          $pkgId = $env:ORT_OPENVINO_PACKAGE
+          $ver = $env:ORT_OPENVINO_VERSION
+          $url = "https://api.nuget.org/v3-flatcontainer/$pkgId/$ver/$pkgId.$ver.nupkg"
           Write-Host "Downloading $url"
-          Invoke-WebRequest -Uri $url -OutFile onnxruntime.zip
-          Expand-Archive -Path onnxruntime.zip -DestinationPath third_party_extract
-          New-Item -ItemType Directory -Force -Path third_party | Out-Null
-          Move-Item "third_party_extract/onnxruntime-win-x64-$ver" third_party/onnxruntime
+          Invoke-WebRequest -Uri $url -OutFile ort_openvino.nupkg
+
+          # A .nupkg is a plain zip; Expand-Archive wants a .zip extension.
+          Copy-Item ort_openvino.nupkg ort_openvino.zip
+          Expand-Archive -Path ort_openvino.zip -DestinationPath ort_openvino_extract
+
+          New-Item -ItemType Directory -Force -Path third_party/onnxruntime/include | Out-Null
+          New-Item -ItemType Directory -Force -Path third_party/onnxruntime/lib | Out-Null
+
+          # Flatten whatever the package's actual header layout is
+          # (NuGet native packages typically use build/native/include/).
+          Get-ChildItem -Path ort_openvino_extract -Recurse -Filter "*.h" |
+            Copy-Item -Destination third_party/onnxruntime/include -Force
+
+          # Same for the win-x64 native binaries: onnxruntime.dll/.lib,
+          # the OpenVINO EP plugin, and the OpenVINO runtime DLLs +
+          # plugins.xml it needs, all bundled in runtimes/win-x64/native/.
+          Get-ChildItem -Path ort_openvino_extract -Recurse -Include "*.dll", "*.lib", "*.xml" |
+            Where-Object { $_.FullName -match "[/\\]win-x64[/\\]" -or $_.FullName -match "[/\\]runtimes[/\\]" } |
+            Copy-Item -Destination third_party/onnxruntime/lib -Force
+
+          Write-Host "Headers:"; Get-ChildItem third_party/onnxruntime/include | Select-Object Name
+          Write-Host "Native libs:"; Get-ChildItem third_party/onnxruntime/lib | Select-Object Name
 
       - name: Download PP-OCRv6 models
         shell: pwsh
@@ -77,6 +106,7 @@ jobs:
           New-Item -ItemType Directory -Force -Path $pkg | Out-Null
           Copy-Item build/Release/paddlevino.exe $pkg/
           Copy-Item build/Release/*.dll $pkg/ -ErrorAction SilentlyContinue
+          Copy-Item build/Release/*.xml $pkg/ -ErrorAction SilentlyContinue
           Copy-Item C:/vcpkg/installed/x64-windows/bin/*.dll $pkg/ -ErrorAction SilentlyContinue
           New-Item -ItemType Directory -Force -Path "$pkg/models" | Out-Null
           Copy-Item models/*.onnx "$pkg/models/" -ErrorAction SilentlyContinue

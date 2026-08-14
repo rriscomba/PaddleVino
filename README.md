@@ -121,30 +121,33 @@ call throws; PaddleVino catches that, prints a clear warning to stderr,
 and continues on the plain CPU execution provider — it never fails
 silently, and it never crashes because the flag was passed.
 
-**Important, please read**: the official release `.exe` built by this
-repo's GitHub Actions workflow links the **stock Microsoft ONNX Runtime
-Windows package**, which does **not** include the OpenVINO execution
-provider. Building ONNX Runtime from source with `--use_openvino` was
-evaluated and rejected for the default CI pipeline: it requires the full
-OpenVINO toolkit installed on the runner and commonly takes well over an
-hour, on top of the rest of the build, which risks exceeding practical CI
-time and is fragile on a shared `windows-latest` runner. There is also no
-official prebuilt native (C++) ONNX Runtime binary with OpenVINO EP for
-Windows — Microsoft/Intel only publish OpenVINO EP through the Python
-`onnxruntime-openvino` PyPI package and a C#/.NET NuGet package
-(`Intel.ML.OnnxRuntime.OpenVino`), neither of which is usable from this
-C++ CLI.
+**How the release `.exe` gets a real OpenVINO-enabled ONNX Runtime**: this
+is exactly how Python's `onnxruntime-openvino` PyPI wheel works too — it
+doesn't require OpenVINO to be separately installed on the machine either;
+it just bundles the prebuilt OpenVINO runtime binaries inside the wheel,
+so `pip install` drops them straight into `site-packages`. There is a native
+(C++) equivalent of that same prebuilt binary, just distributed via NuGet
+instead of PyPI: **Intel's official
+[`Intel.ML.OnnxRuntime.OpenVino`](https://www.nuget.org/packages/Intel.ML.OnnxRuntime.OpenVino)**
+package. A `.nupkg` is a plain zip, so no `.NET`/`nuget.exe`/`dotnet` tooling
+is needed to use it from a C++ project — the CI workflow
+(`.github/workflows/build-windows.yml`) downloads it directly from the
+NuGet v3 flat-container API, unzips it, and copies the flattened headers and
+`runtimes/win-x64/native/*.{dll,lib,xml}` (which includes both the OpenVINO
+execution provider and the OpenVINO runtime DLLs/`plugins.xml` it depends
+on, plus the plain CPU execution provider) into `third_party/onnxruntime/`,
+the same layout `-DONNXRUNTIME_ROOTDIR` expects. This replaced an earlier,
+incorrect assumption in this README that no native OpenVINO-enabled ONNX
+Runtime build existed for Windows/C++ — it does, it was just filed under
+NuGet instead of a GitHub release.
 
-So today: `--engine openvino` is implemented and will genuinely use the
-OpenVINO EP **if** you link PaddleVino against a build of ONNX Runtime
-that has it compiled in (e.g. one you build yourself locally with
-`--use_openvino`, following
-[the official ONNX Runtime OpenVINO EP build docs](https://onnxruntime.ai/docs/execution-providers/OpenVINO-ExecutionProvider.html)),
-by pointing `-DONNXRUNTIME_ROOTDIR` at that build. The default GitHub
-Actions release build does not do this, and using `--engine openvino`
-against that release `.exe` will print the fallback warning and run on
-CPU. This is documented here rather than silently shipping a flag that
-looks like it works but doesn't.
+**Honesty note**: this packaging approach has not yet been confirmed by a
+green CI run that actually exercises `--engine openvino` end-to-end (e.g.
+checking ONNX Runtime's verbose logs for the OpenVINO EP loading). If the
+NuGet package's internal folder layout differs from what's assumed above,
+or a runtime dependency is missing, the CI build step may need small
+adjustments — but even in that case `--engine openvino` degrades to the
+CPU fallback described above rather than crashing, so it's safe to try.
 
 ## PP-OCRv6 models
 
