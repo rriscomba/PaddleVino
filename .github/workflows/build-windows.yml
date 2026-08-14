@@ -47,6 +47,7 @@ jobs:
           Write-Host "Downloading $url"
           Invoke-WebRequest -Uri $url -OutFile onnxruntime.zip
           Expand-Archive -Path onnxruntime.zip -DestinationPath third_party_extract
+          New-Item -ItemType Directory -Force -Path third_party | Out-Null
           Move-Item "third_party_extract/onnxruntime-win-x64-$ver" third_party/onnxruntime
 
       - name: Download PP-OCRv6 models
