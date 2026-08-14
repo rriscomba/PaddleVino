@@ -193,14 +193,23 @@ std::vector<std::vector<size_t>> groupIntoRows(const std::vector<TextBlock> &blo
     std::vector<VSpan> rowSpan;
     for (size_t idx: order) {
         int bestRow = -1;
-        float bestOverlap = 0.5f; // minimum overlap ratio to join a row
+        // Intersection-over-union of the vertical spans, not intersection
+        // over the shorter span: for small, tightly-packed text (e.g. a
+        // digital-signature stamp) the box-height jitter between adjacent
+        // physical lines is a large fraction of each line's own height, so
+        // "inter/shorter" was merging distinct lines together. IoU is
+        // stricter for lines that only touch/overlap slightly while still
+        // accepting near-identical spans (genuine same-line runs).
+        float bestOverlap = 0.5f; // minimum IoU to join a row
         for (size_t r = 0; r < rows.size(); ++r) {
             int interLo = (std::max)(span[idx].y0, rowSpan[r].y0);
             int interHi = (std::min)(span[idx].y1, rowSpan[r].y1);
             int inter = (std::max)(0, interHi - interLo);
-            int shorter = (std::min)(span[idx].y1 - span[idx].y0, rowSpan[r].y1 - rowSpan[r].y0);
-            if (shorter <= 0) continue;
-            float overlap = (float) inter / (float) shorter;
+            int unionLo = (std::min)(span[idx].y0, rowSpan[r].y0);
+            int unionHi = (std::max)(span[idx].y1, rowSpan[r].y1);
+            int uni = unionHi - unionLo;
+            if (uni <= 0) continue;
+            float overlap = (float) inter / (float) uni;
             if (overlap > bestOverlap) {
                 bestOverlap = overlap;
                 bestRow = (int) r;
