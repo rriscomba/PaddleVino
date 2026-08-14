@@ -1,0 +1,306 @@
+#include <cstdio>
+#include <cstring>
+#include <string>
+#include <vector>
+#include <sstream>
+#include <fstream>
+#include <iostream>
+#include <algorithm>
+#include <filesystem>
+#include <utility>
+#include "main.h"
+#include "version.h"
+#include "OcrLite.h"
+#include "OcrUtils.h"
+#include "EngineType.h"
+
+#ifdef _WIN32
+#include <windows.h>
+#endif
+
+namespace fs = std::filesystem;
+
+namespace {
+
+struct Options {
+    std::string input;
+    bool recursive = false;
+    std::string output;
+    std::string format = "json";
+    std::string engine = "cpu";
+    std::string modelsDir = "models";
+    std::string detName = "det.onnx";
+    std::string clsName = "cls.onnx";
+    std::string recName = "rec.onnx";
+    std::string keysName = "ppocrv6_dict.txt";
+    int numThread = 4;
+    int padding = 50;
+    int maxSideLen = 1024;
+    float boxScoreThresh = 0.5f;
+    float boxThresh = 0.3f;
+    float unClipRatio = 1.6f;
+    bool doAngle = true;
+    bool mostAngle = true;
+};
+
+void printHelp(FILE *out, const char *argv0) {
+    fprintf(out, " ------- Usage -------\n");
+    fprintf(out, "%s %s\n", argv0, usageMsg);
+    fprintf(out, " ------- Required -------\n%s\n", requiredMsg);
+    fprintf(out, " ------- Options -------\n%s\n", optionalMsg);
+    fprintf(out, " ------- Other -------\n%s\n", otherMsg);
+    fprintf(out, " ------- Examples -------\n%s\n", examplesMsg);
+}
+
+bool hasImageExtension(const fs::path &p) {
+    std::string ext = p.extension().string();
+    std::transform(ext.begin(), ext.end(), ext.begin(), ::tolower);
+    return ext == ".jpg" || ext == ".jpeg" || ext == ".png" || ext == ".bmp" ||
+           ext == ".tif" || ext == ".tiff" || ext == ".webp";
+}
+
+std::vector<std::string> collectImages(const std::string &input, bool recursive) {
+    std::vector<std::string> images;
+    fs::path root(input);
+    if (fs::is_regular_file(root)) {
+        images.push_back(root.string());
+        return images;
+    }
+    if (!fs::is_directory(root)) {
+        return images;
+    }
+    if (recursive) {
+        for (auto &entry: fs::recursive_directory_iterator(root)) {
+            if (entry.is_regular_file() && hasImageExtension(entry.path())) {
+                images.push_back(entry.path().string());
+            }
+        }
+    } else {
+        for (auto &entry: fs::directory_iterator(root)) {
+            if (entry.is_regular_file() && hasImageExtension(entry.path())) {
+                images.push_back(entry.path().string());
+            }
+        }
+    }
+    std::sort(images.begin(), images.end());
+    return images;
+}
+
+std::string jsonEscape(const std::string &s) {
+    std::ostringstream out;
+    for (char c: s) {
+        switch (c) {
+            case '"':
+                out << "\\\"";
+                break;
+            case '\\':
+                out << "\\\\";
+                break;
+            case '\n':
+                out << "\\n";
+                break;
+            case '\r':
+                out << "\\r";
+                break;
+            case '\t':
+                out << "\\t";
+                break;
+            default:
+                if (static_cast<unsigned char>(c) < 0x20) {
+                    char buf[8];
+                    snprintf(buf, sizeof(buf), "\\u%04x", c);
+                    out << buf;
+                } else {
+                    out << c;
+                }
+        }
+    }
+    return out.str();
+}
+
+float averageConfidence(const std::vector<float> &charScores) {
+    if (charScores.empty()) return 0.0f;
+    float sum = 0.0f;
+    for (float s: charScores) sum += s;
+    return sum / static_cast<float>(charScores.size());
+}
+
+std::string resultToJson(const std::string &file, const OcrResult &result, bool ok, const std::string &error) {
+    std::ostringstream out;
+    out << "{\"file\":\"" << jsonEscape(file) << "\",";
+    if (!ok) {
+        out << "\"error\":\"" << jsonEscape(error) << "\",\"lines\":[]}";
+        return out.str();
+    }
+    out << "\"detect_time_ms\":" << result.detectTime << ",\"lines\":[";
+    for (size_t i = 0; i < result.textBlocks.size(); ++i) {
+        const TextBlock &b = result.textBlocks[i];
+        if (i > 0) out << ",";
+        out << "{\"text\":\"" << jsonEscape(b.text) << "\",";
+        out << "\"confidence\":" << averageConfidence(b.charScores) << ",";
+        out << "\"box_score\":" << b.boxScore << ",";
+        out << "\"box\":[";
+        for (size_t p = 0; p < b.boxPoint.size(); ++p) {
+            if (p > 0) out << ",";
+            out << "[" << b.boxPoint[p].x << "," << b.boxPoint[p].y << "]";
+        }
+        out << "]}";
+    }
+    out << "]}";
+    return out.str();
+}
+
+std::string resultToText(const std::string &file, const OcrResult &result, bool ok, const std::string &error) {
+    std::ostringstream out;
+    out << "==== " << file << " ====\n";
+    if (!ok) {
+        out << "ERROR: " << error << "\n";
+        return out.str();
+    }
+    for (const TextBlock &b: result.textBlocks) {
+        out << b.text << "\t(confidence=" << averageConfidence(b.charScores) << ")\n";
+    }
+    return out.str();
+}
+
+} // namespace
+
+int main(int argc, char **argv) {
+    if (argc <= 1) {
+        printHelp(stderr, argv[0]);
+        return 1;
+    }
+#ifdef _WIN32
+    SetConsoleOutputCP(CP_UTF8);
+#endif
+
+    Options opt;
+    for (int i = 1; i < argc; ++i) {
+        std::string arg = argv[i];
+        auto next = [&](const char *flagName) -> std::string {
+            if (i + 1 >= argc) {
+                fprintf(stderr, "Missing value for %s\n", flagName);
+                exit(1);
+            }
+            return argv[++i];
+        };
+        if (arg == "--input") opt.input = next("--input");
+        else if (arg == "--recursive") opt.recursive = true;
+        else if (arg == "--output") opt.output = next("--output");
+        else if (arg == "--format") opt.format = next("--format");
+        else if (arg == "--engine") opt.engine = next("--engine");
+        else if (arg == "--models-dir") opt.modelsDir = next("--models-dir");
+        else if (arg == "--det") opt.detName = next("--det");
+        else if (arg == "--cls") opt.clsName = next("--cls");
+        else if (arg == "--rec") opt.recName = next("--rec");
+        else if (arg == "--keys") opt.keysName = next("--keys");
+        else if (arg == "--threads") opt.numThread = std::stoi(next("--threads"));
+        else if (arg == "--padding") opt.padding = std::stoi(next("--padding"));
+        else if (arg == "--max-side-len") opt.maxSideLen = std::stoi(next("--max-side-len"));
+        else if (arg == "--box-score-thresh") opt.boxScoreThresh = std::stof(next("--box-score-thresh"));
+        else if (arg == "--box-thresh") opt.boxThresh = std::stof(next("--box-thresh"));
+        else if (arg == "--unclip-ratio") opt.unClipRatio = std::stof(next("--unclip-ratio"));
+        else if (arg == "--no-angle") opt.doAngle = false;
+        else if (arg == "--no-most-angle") opt.mostAngle = false;
+        else if (arg == "--version" || arg == "-v") {
+            printf("%s\n", VERSION);
+            return 0;
+        } else if (arg == "--help" || arg == "-h") {
+            printHelp(stdout, argv[0]);
+            return 0;
+        } else {
+            fprintf(stderr, "Unknown option: %s\n", arg.c_str());
+            printHelp(stderr, argv[0]);
+            return 1;
+        }
+    }
+
+    if (opt.input.empty()) {
+        fprintf(stderr, "--input is required\n\n");
+        printHelp(stderr, argv[0]);
+        return 1;
+    }
+    if (opt.format != "json" && opt.format != "txt") {
+        fprintf(stderr, "--format must be 'json' or 'txt'\n");
+        return 1;
+    }
+    EngineType engine = EngineType::CPU;
+    if (opt.engine == "openvino") {
+        engine = EngineType::OpenVINO;
+    } else if (opt.engine != "cpu") {
+        fprintf(stderr, "--engine must be 'cpu' or 'openvino'\n");
+        return 1;
+    }
+
+    std::string detPath = opt.modelsDir + "/" + opt.detName;
+    std::string clsPath = opt.modelsDir + "/" + opt.clsName;
+    std::string recPath = opt.modelsDir + "/" + opt.recName;
+    std::string keysPath = opt.modelsDir + "/" + opt.keysName;
+
+    for (auto &pair: std::vector<std::pair<std::string, std::string>>{
+            {"det model",  detPath},
+            {"cls model",  clsPath},
+            {"rec model",  recPath},
+            {"keys file",  keysPath}}) {
+        if (!isFileExists(pair.second)) {
+            fprintf(stderr, "%s not found: %s\n", pair.first.c_str(), pair.second.c_str());
+            return 1;
+        }
+    }
+
+    std::vector<std::string> images = collectImages(opt.input, opt.recursive);
+    if (images.empty()) {
+        fprintf(stderr, "No input images found at: %s\n", opt.input.c_str());
+        return 1;
+    }
+
+    OcrLite ocrLite;
+    ocrLite.setNumThread(opt.numThread);
+    ocrLite.initLogger(
+            false, //isOutputConsole -- keep stdout clean for JSON/txt piping
+            false, //isOutputPartImg
+            false);//isOutputResultImg
+    ocrLite.setEngine(engine);
+    ocrLite.initModels(detPath, clsPath, recPath, keysPath);
+
+    std::ostream *out = &std::cout;
+    std::ofstream outFile;
+    if (!opt.output.empty()) {
+        outFile.open(opt.output, std::ios::binary);
+        if (!outFile.is_open()) {
+            fprintf(stderr, "Could not open output file: %s\n", opt.output.c_str());
+            return 1;
+        }
+        out = &outFile;
+    }
+
+    if (opt.format == "json") *out << "[";
+    for (size_t i = 0; i < images.size(); ++i) {
+        const std::string &imgPath = images[i];
+        bool ok = true;
+        std::string error;
+        OcrResult result{};
+        try {
+            fs::path p(imgPath);
+            std::string dir = p.parent_path().string();
+            if (!dir.empty()) dir += "/";
+            std::string name = p.filename().string();
+            result = ocrLite.detect(dir.c_str(), name.c_str(), opt.padding, opt.maxSideLen,
+                                     opt.boxScoreThresh, opt.boxThresh, opt.unClipRatio,
+                                     opt.doAngle, opt.mostAngle);
+        } catch (const std::exception &e) {
+            ok = false;
+            error = e.what();
+        }
+        if (opt.format == "json") {
+            if (i > 0) *out << ",";
+            *out << resultToJson(imgPath, result, ok, error);
+        } else {
+            *out << resultToText(imgPath, result, ok, error);
+        }
+    }
+    if (opt.format == "json") *out << "]";
+    if (opt.format == "json") *out << "\n";
+
+    return 0;
+}

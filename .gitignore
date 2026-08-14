@@ -67,3 +67,15 @@ vcpkg_installed/
 # test output & cache
 Testing/
 .cache/
+
+# Claude Code agent worktrees
+.claude/
+
+# PaddleVino: downloaded model weights (fetched via models/download_models.*)
+models/*.onnx
+models/ppocrv6_dict.txt
+
+# PaddleVino: build outputs and downloaded third-party binaries
+dist/
+third_party/onnxruntime/
+third_party_extract/
