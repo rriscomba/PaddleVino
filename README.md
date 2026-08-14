@@ -46,6 +46,7 @@ repository builds on. Changes made here:
 paddlevino.exe --input imagen.png --engine openvino --output resultado.json
 paddlevino.exe --input carpeta\ --recursive --format json
 paddlevino.exe --input photo.jpg --format txt
+paddlevino.exe --input scan.png --format reading
 ```
 
 | Flag | Description | Default |
@@ -53,7 +54,7 @@ paddlevino.exe --input photo.jpg --format txt
 | `--input <path>` | Image file or a directory of images (**required**) | — |
 | `--recursive` | When `--input` is a directory, search it recursively | off |
 | `--output <path>` | Write results to this file instead of stdout | stdout |
-| `--format json\|txt` | Output format | `json` |
+| `--format json\|txt\|reading` | Output format (see below) | `json` |
 | `--engine cpu\|openvino` | Execution backend | `cpu` |
 | `--models-dir <dir>` | Directory containing the model files | `models` |
 | `--det <file>` | Detection model file name | `det.onnx` |
@@ -89,6 +90,22 @@ JSON output is an array with one entry per processed image:
   }
 ]
 ```
+
+`--format txt` prints one line per detected text run, each tagged with its
+own confidence — a text run is whatever the detector boxed as a single
+region, which for a printed line containing a label and a value (e.g. a
+form's "Nombre" and the name next to it) is usually *two* runs, so they show
+up as two separate lines even though they sit on the same row of the
+document.
+
+`--format reading` is meant for reading a scanned document, not inspecting
+detections: the first line is the image's average confidence (e.g.
+`confidence=96.83%`), and every line after that is plain text with no boxes,
+scores, or per-line labels. Text runs are re-flowed into rows by clustering
+boxes that overlap vertically by more than half of the shorter box's height,
+ordering rows top-to-bottom, and ordering runs left-to-right within a row —
+so a label and its value on the same printed line come back on the same
+output line, two spaces apart.
 
 PDF input is out of scope for this tool (the base engine has no PDF
 support); rasterize pages to images first if you need that. This may be

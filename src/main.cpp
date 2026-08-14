@@ -163,6 +163,92 @@ std::string resultToText(const std::string &file, const OcrResult &result, bool 
     return out.str();
 }
 
+// Groups detected text blocks into reading-order rows: blocks whose boxes
+// overlap vertically by more than half of the shorter box's height are
+// considered part of the same physical line (the detector emits one box
+// per text run, so two runs on the same printed line still arrive as
+// separate blocks and need to be re-joined here), then rows are ordered
+// top-to-bottom and blocks within a row left-to-right.
+std::vector<std::vector<size_t>> groupIntoRows(const std::vector<TextBlock> &blocks) {
+    struct VSpan {
+        int y0, y1;
+    };
+    std::vector<VSpan> span(blocks.size());
+    for (size_t i = 0; i < blocks.size(); ++i) {
+        int y0 = blocks[i].boxPoint.front().y, y1 = blocks[i].boxPoint.front().y;
+        for (const auto &pt: blocks[i].boxPoint) {
+            y0 = (std::min)(y0, pt.y);
+            y1 = (std::max)(y1, pt.y);
+        }
+        span[i] = {y0, y1};
+    }
+
+    std::vector<size_t> order(blocks.size());
+    for (size_t i = 0; i < order.size(); ++i) order[i] = i;
+    std::sort(order.begin(), order.end(), [&](size_t a, size_t b) {
+        return span[a].y0 < span[b].y0;
+    });
+
+    std::vector<std::vector<size_t>> rows;
+    std::vector<VSpan> rowSpan;
+    for (size_t idx: order) {
+        int bestRow = -1;
+        float bestOverlap = 0.5f; // minimum overlap ratio to join a row
+        for (size_t r = 0; r < rows.size(); ++r) {
+            int interLo = (std::max)(span[idx].y0, rowSpan[r].y0);
+            int interHi = (std::min)(span[idx].y1, rowSpan[r].y1);
+            int inter = (std::max)(0, interHi - interLo);
+            int shorter = (std::min)(span[idx].y1 - span[idx].y0, rowSpan[r].y1 - rowSpan[r].y0);
+            if (shorter <= 0) continue;
+            float overlap = (float) inter / (float) shorter;
+            if (overlap > bestOverlap) {
+                bestOverlap = overlap;
+                bestRow = (int) r;
+            }
+        }
+        if (bestRow < 0) {
+            rows.push_back({idx});
+            rowSpan.push_back(span[idx]);
+        } else {
+            rows[bestRow].push_back(idx);
+            rowSpan[bestRow].y0 = (std::min)(rowSpan[bestRow].y0, span[idx].y0);
+            rowSpan[bestRow].y1 = (std::max)(rowSpan[bestRow].y1, span[idx].y1);
+        }
+    }
+
+    // Order rows top-to-bottom, and blocks within each row left-to-right.
+    std::sort(rows.begin(), rows.end(), [&](const std::vector<size_t> &a, const std::vector<size_t> &b) {
+        return span[a.front()].y0 < span[b.front()].y0;
+    });
+    for (auto &row: rows) {
+        std::sort(row.begin(), row.end(), [&](size_t a, size_t b) {
+            return blocks[a].boxPoint.front().x < blocks[b].boxPoint.front().x;
+        });
+    }
+    return rows;
+}
+
+std::string resultToReading(const std::string &file, const OcrResult &result, bool ok, const std::string &error) {
+    std::ostringstream out;
+    if (!ok) {
+        out << "confidence=0.00% (error)\n" << "ERROR (" << file << "): " << error << "\n";
+        return out.str();
+    }
+    float sum = 0.0f;
+    for (const TextBlock &b: result.textBlocks) sum += averageConfidence(b.charScores);
+    float avgConfidence = result.textBlocks.empty() ? 0.0f : sum / (float) result.textBlocks.size();
+    out << "confidence=" << (avgConfidence * 100.0f) << "%\n";
+
+    for (const std::vector<size_t> &row: groupIntoRows(result.textBlocks)) {
+        for (size_t i = 0; i < row.size(); ++i) {
+            if (i > 0) out << "  ";
+            out << result.textBlocks[row[i]].text;
+        }
+        out << "\n";
+    }
+    return out.str();
+}
+
 } // namespace
 
 int main(int argc, char **argv) {
@@ -220,8 +306,8 @@ int main(int argc, char **argv) {
         printHelp(stderr, argv[0]);
         return 1;
     }
-    if (opt.format != "json" && opt.format != "txt") {
-        fprintf(stderr, "--format must be 'json' or 'txt'\n");
+    if (opt.format != "json" && opt.format != "txt" && opt.format != "reading") {
+        fprintf(stderr, "--format must be 'json', 'txt' or 'reading'\n");
         return 1;
     }
     EngineType engine = EngineType::CPU;
@@ -295,6 +381,8 @@ int main(int argc, char **argv) {
         if (opt.format == "json") {
             if (i > 0) *out << ",";
             *out << resultToJson(imgPath, result, ok, error);
+        } else if (opt.format == "reading") {
+            *out << resultToReading(imgPath, result, ok, error);
         } else {
             *out << resultToText(imgPath, result, ok, error);
         }
