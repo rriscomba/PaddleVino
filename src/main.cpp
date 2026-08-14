@@ -41,6 +41,7 @@ struct Options {
     float unClipRatio = 1.6f;
     bool doAngle = true;
     bool mostAngle = true;
+    float readingRowOverlap = 0.5f;
 };
 
 void printHelp(FILE *out, const char *argv0) {
@@ -163,13 +164,13 @@ std::string resultToText(const std::string &file, const OcrResult &result, bool 
     return out.str();
 }
 
-// Groups detected text blocks into reading-order rows: blocks whose boxes
-// overlap vertically by more than half of the shorter box's height are
+// Groups detected text blocks into reading-order rows: blocks whose boxes'
+// vertical spans have an intersection-over-union above rowOverlapThresh are
 // considered part of the same physical line (the detector emits one box
 // per text run, so two runs on the same printed line still arrive as
 // separate blocks and need to be re-joined here), then rows are ordered
 // top-to-bottom and blocks within a row left-to-right.
-std::vector<std::vector<size_t>> groupIntoRows(const std::vector<TextBlock> &blocks) {
+std::vector<std::vector<size_t>> groupIntoRows(const std::vector<TextBlock> &blocks, float rowOverlapThresh) {
     struct VSpan {
         int y0, y1;
     };
@@ -200,7 +201,7 @@ std::vector<std::vector<size_t>> groupIntoRows(const std::vector<TextBlock> &blo
         // "inter/shorter" was merging distinct lines together. IoU is
         // stricter for lines that only touch/overlap slightly while still
         // accepting near-identical spans (genuine same-line runs).
-        float bestOverlap = 0.5f; // minimum IoU to join a row
+        float bestOverlap = rowOverlapThresh;
         for (size_t r = 0; r < rows.size(); ++r) {
             int interLo = (std::max)(span[idx].y0, rowSpan[r].y0);
             int interHi = (std::min)(span[idx].y1, rowSpan[r].y1);
@@ -237,7 +238,8 @@ std::vector<std::vector<size_t>> groupIntoRows(const std::vector<TextBlock> &blo
     return rows;
 }
 
-std::string resultToReading(const std::string &file, const OcrResult &result, bool ok, const std::string &error) {
+std::string resultToReading(const std::string &file, const OcrResult &result, bool ok, const std::string &error,
+                            float rowOverlapThresh) {
     std::ostringstream out;
     if (!ok) {
         out << "confidence=0.00% (error)\n" << "ERROR (" << file << "): " << error << "\n";
@@ -248,7 +250,7 @@ std::string resultToReading(const std::string &file, const OcrResult &result, bo
     float avgConfidence = result.textBlocks.empty() ? 0.0f : sum / (float) result.textBlocks.size();
     out << "confidence=" << (avgConfidence * 100.0f) << "%\n";
 
-    for (const std::vector<size_t> &row: groupIntoRows(result.textBlocks)) {
+    for (const std::vector<size_t> &row: groupIntoRows(result.textBlocks, rowOverlapThresh)) {
         for (size_t i = 0; i < row.size(); ++i) {
             if (i > 0) out << "  ";
             out << result.textBlocks[row[i]].text;
@@ -297,6 +299,7 @@ int main(int argc, char **argv) {
         else if (arg == "--unclip-ratio") opt.unClipRatio = std::stof(next("--unclip-ratio"));
         else if (arg == "--no-angle") opt.doAngle = false;
         else if (arg == "--no-most-angle") opt.mostAngle = false;
+        else if (arg == "--reading-row-overlap") opt.readingRowOverlap = std::stof(next("--reading-row-overlap"));
         else if (arg == "--version" || arg == "-v") {
             printf("%s\n", VERSION);
             return 0;
@@ -391,7 +394,7 @@ int main(int argc, char **argv) {
             if (i > 0) *out << ",";
             *out << resultToJson(imgPath, result, ok, error);
         } else if (opt.format == "reading") {
-            *out << resultToReading(imgPath, result, ok, error);
+            *out << resultToReading(imgPath, result, ok, error, opt.readingRowOverlap);
         } else {
             *out << resultToText(imgPath, result, ok, error);
         }
