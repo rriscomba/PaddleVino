@@ -69,12 +69,14 @@ target_link_libraries(paddlevino ${OpenCV_LIBS} ${ONNXRUNTIME_LIB})
 
 if (WIN32)
     # Copy the ONNX Runtime shared library next to the built executable so it
-    # runs without needing to be on PATH.
-    file(GLOB ONNXRUNTIME_DLLS "${ONNXRUNTIME_ROOTDIR}/lib/*.dll")
-    foreach (_dll ${ONNXRUNTIME_DLLS})
+    # runs without needing to be on PATH. When ONNXRUNTIME_ROOTDIR points at
+    # the OpenVINO-EP build, this also picks up the bundled OpenVINO runtime
+    # DLLs and plugins.xml (OpenVINO's device-plugin registry) it needs.
+    file(GLOB ONNXRUNTIME_RUNTIME_FILES "${ONNXRUNTIME_ROOTDIR}/lib/*.dll" "${ONNXRUNTIME_ROOTDIR}/lib/*.xml")
+    foreach (_file ${ONNXRUNTIME_RUNTIME_FILES})
         add_custom_command(TARGET paddlevino POST_BUILD
-                COMMAND ${CMAKE_COMMAND} -E copy_if_different "${_dll}" "$<TARGET_FILE_DIR:paddlevino>"
-                COMMENT "Copying ${_dll} next to paddlevino executable")
+                COMMAND ${CMAKE_COMMAND} -E copy_if_different "${_file}" "$<TARGET_FILE_DIR:paddlevino>"
+                COMMENT "Copying ${_file} next to paddlevino executable")
     endforeach ()
 endif ()
 
