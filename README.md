@@ -29,7 +29,11 @@ repository builds on. Changes made here:
 
 ## License
 
-- This repository's own code is MIT-licensed — see [`LICENSE`](LICENSE).
+- This repository's own code is licensed under **AGPL-3.0** — see
+  [`LICENSE`](LICENSE). It was MIT-licensed up to and including the last
+  release published under that license; anything already published under MIT
+  stays MIT permanently, the change applies going forward only. The move was
+  required by the checkbox detection model below.
 - The OCR engine (`src/`, `include/`) is adapted from
   [RapidAI/RapidOcrOnnx](https://github.com/RapidAI/RapidOcrOnnx), which is
   Apache-2.0. That license is preserved at
@@ -39,6 +43,13 @@ repository builds on. Changes made here:
   (Baidu/PaddlePaddle), free to use for inference; redistributed here in
   ONNX form via the RapidAI/RapidOCR project's model mirror on ModelScope.
   Review PaddleOCR's model license before commercial redistribution.
+- Checkbox detection model (optional, only used with `--detect-checkboxes`):
+  YOLO12n from [wendys-llc/checkbox-detector](https://huggingface.co/wendys-llc/checkbox-detector),
+  exported by Ultralytics and declaring **AGPL-3.0** in its metadata. Its
+  license text is at
+  [`THIRD_PARTY_LICENSES/checkbox-detector-LICENSE-AGPL-3.0.txt`](THIRD_PARTY_LICENSES/checkbox-detector-LICENSE-AGPL-3.0.txt).
+  It is not downloaded by default — pass `-Checkbox` / `checkbox` to
+  `models/download_models.ps1` / `.sh` if you want it.
 
 ## CLI usage
 
@@ -72,6 +83,56 @@ paddlevino.exe --input scan.png --format reading
 | `--reading-row-overlap <f>` | `--format reading` row-clustering threshold (see below) | `0.5` |
 | `--version`, `-v` | Print version and exit | — |
 | `--help`, `-h` | Print usage and exit | — |
+
+Cell-structure detection (see "Cell structure detection" below). All of these
+are off by default, so behaviour without them is unchanged:
+
+| Flag | Description | Default |
+| --- | --- | --- |
+| `--detect-cells` | Detect field/table cells and report them under the JSON `cells` key | off |
+| `--cell-h-frac <int>` | Horizontal kernel divisor (`width/N`) | `28` |
+| `--cell-v-frac <int>` | Vertical kernel divisor (`height/N`) | `80` |
+| `--cell-min-width <f>` | Minimum cell width as a fraction of the page width | `0.012` |
+| `--cell-min-height <f>` | Minimum cell height as a fraction of the page height | `0.006` |
+| `--cell-max-area <f>` | Maximum cell area as a fraction of the page | `0.6` |
+| `--cell-rectangularity <f>` | Minimum `contourArea / boundingBoxArea` | `0.7` |
+| `--reading-column-gap <f>` | Horizontal gap (in line heights) above which `--format reading` separates two runs with `\|`; only applies with `--detect-cells` | `0.8` |
+
+Checkbox detection (see "Checkbox detection" below). Also all off by default:
+
+| Flag | Description | Default |
+| --- | --- | --- |
+| `--detect-checkboxes` | Detect checkboxes and whether they are ticked | off |
+| `--checkbox-model <file>` | Model file name inside `--models-dir` | `checkbox.onnx` |
+| `--checkbox-profile strict\|balanced\|aggressive` | Preset for the knobs below; any explicit flag overrides it | `balanced` |
+| `--checkbox-conf <f>` | Confidence threshold of the main pass | `0.25` |
+| `--checkbox-iou <f>` | NMS IoU, crossing classes | `0.45` |
+| `--checkbox-max-saturation <f>` | Maximum mean HSV saturation; drops colour logos | `20.0` |
+| `--checkbox-input-size <int>` | Model input side (letterboxed) | `1024` |
+| `--checkbox-form-min <int>` | Boxes the conservative pass must find for the document to count as a form; `0` disables the gate | `3` |
+| `--no-checkbox-rescue` | Disable the low-confidence rescue | rescue on |
+| `--checkbox-rescue-conf <f>` | Minimum confidence of a rescue candidate | `0.04` |
+| `--checkbox-rescue-min-cluster <int>` | Aligned candidates needed in one X column | `2` |
+| `--checkbox-rescue-x-tol <f>` | Pixel tolerance for grouping candidates into a column | `20.0` |
+| `--checkbox-rescue-spacing-tol <f>` | Row-spacing tolerance (multiple of the median gap) | `1.6` |
+| `--checkbox-dedup-y-frac <f>` | Y distance (fraction of height) below which two detections are the same object | `0.6` |
+| `--no-checkbox-snap` | Use the raw network box without snapping | snap on |
+| `--checkbox-snap-margin <int>` | Pixel margin around the box when looking for the real rectangle | `4` |
+| `--checkbox-snap-min-area <f>` | Minimum candidate area as a fraction of the search region | `0.07` |
+| `--checkbox-snap-max-area <f>` | Maximum, likewise | `0.95` |
+| `--checkbox-snap-min-aspect <f>` | Minimum accepted aspect | `0.4` |
+| `--checkbox-snap-max-aspect <f>` | Maximum accepted aspect (wide boxes exist, ~2.4) | `3.0` |
+| `--checkbox-snap-rectangularity <f>` | Minimum candidate rectangularity | `0.75` |
+| `--checkbox-ink-thresh <f>` | Ink density above which a box counts as ticked | `0.05` |
+| `--checkbox-ink-border <f>` | Fraction of the side cropped inwards to exclude the border | `0.25` |
+| `--checkbox-ink-dark <int>` | Grey level below which a pixel counts as ink | `128` |
+
+Diagnostics:
+
+| Flag | Description | Default |
+| --- | --- | --- |
+| `--debug-overlay <file>` | Write a copy of the page with the detected boxes drawn on it: checkboxes green (ticked) / red (empty) with their ink ratio and confidence, cells in blue | off |
+| `--debug-checkbox-candidates` | Also emit the discarded candidates in the JSON, with the reason each was dropped | off |
 
 JSON output is an array with one entry per processed image:
 
@@ -115,6 +176,135 @@ to lines being merged or split incorrectly than normal body text. If you
 see that, tune `--reading-row-overlap` — raise it (e.g. `0.6`-`0.7`) if
 unrelated lines are being merged, lower it (e.g. `0.3`-`0.4`) if runs that
 belong on the same line are staying split — and re-run.
+
+## Cell structure detection
+
+`--detect-cells` finds the field boxes and table cells of a document from
+its ruling lines, using classic morphology only — no model, no extra
+dependency, no extra download. Opening the inverted-binary page with a long
+horizontal kernel leaves only the horizontal rules, likewise for vertical;
+the union is the table's skeleton, and the holes it encloses are the cells.
+
+The two kernels are deliberately asymmetric. The horizontal one is long
+(`width/28`) and does the real filtering: only a ruling line survives it, no
+text does — which is why a plain-text page yields zero cells. The vertical
+one is short (`height/80`) because the field boxes of typical forms are only
+~20 px tall; with a long vertical kernel their sides don't survive the
+opening, the cell never closes, and most short fields are lost.
+
+With `--detect-cells`, JSON output gains a `cells` key alongside `lines`:
+
+```json
+{
+  "file": "form.png",
+  "detect_time_ms": 123.4,
+  "lines": [ ... ],
+  "cells": [
+    { "box": [[255,520],[600,520],[600,550],[255,550]] }
+  ]
+}
+```
+
+`--detect-cells` also changes how `--format reading` assembles the page: text
+runs whose centre falls inside the same cell are collapsed into a single
+element (joined by spaces, top-to-bottom then left-to-right, positioned at
+the cell), so a two-line address field stops dragging its whole row out of
+alignment, and a label and its value stop landing on different lines. Cells
+are structural units, so they are separated from their neighbours with ` | `;
+between two loose text runs the separator depends on the horizontal gap,
+controlled by `--reading-column-gap` (in line heights, default `0.8`).
+
+One exception: a cell that *contains* checkboxes is not a field with a value
+but a frame grouping several options (a form's list of annexes), so its runs
+are deliberately left loose. Without that rule, the whole list fuses into one
+line.
+
+`--detect-checkboxes` adds each checkbox to `--format reading` as a synthetic
+element reading `[x]` or `[ ]`, positioned at its real box. The existing
+row-clustering then places it next to its label with no extra logic — the
+position already answers "which label does this checkbox belong to".
+
+With cell grouping active, a lower `--reading-row-overlap` works better —
+around `0.25` in the prototype. The global default stays at `0.5` so plain
+`--format reading` is unchanged.
+
+## Checkbox detection
+
+`--detect-checkboxes` needs a YOLO checkbox model (`checkbox.onnx` in
+`--models-dir` by default; download it with
+`models/download_models.ps1 -Checkbox`). The work is split between two very
+different mechanisms, because each is good at exactly what the other is bad
+at:
+
+- **the network says WHAT is a checkbox and WHERE it is.** It is semantic:
+  it does not mistake a "D" for a box. Classic contour vision alone produced
+  21 false positives on a page of pure text, where letters like `D` and `B`
+  are closed, near-rectangular contours the same size as a checkbox.
+- **ink density says WHETHER it is ticked.** It is a physical measurement of
+  the box interior (border excluded), so it does not depend on the model
+  having seen that box style before. The separation is wide: empty `0.000`,
+  a typed X `0.08`–`0.17`, a dark fill `0.60`–`0.91`.
+
+Three filters keep false positives down:
+
+- **saturation** — real checkboxes are achromatic (mean HSV saturation
+  0–0.07); a colour logo is 90–134. This is what removes the corporate logo
+  the network detects at 0.65 confidence.
+- **the document-type gate** — a conservative pass runs first. If it finds
+  fewer than `--checkbox-form-min` boxes the document is not a form, the
+  low-confidence rescue never runs, and the result is returned as is. This is
+  what guarantees zero false positives on plain-text documents; the JSON
+  `document_type` field reports the verdict (`form` or `text`).
+- **box snapping** — the network's boxes are loose and tend to swallow the
+  neighbouring table cell's border; that extra ink turns empty boxes into
+  "checked". Snapping finds the real rectangle first, so the ink measurement
+  is clean. The JSON `snapped` field says whether it succeeded.
+
+With `--detect-checkboxes`, JSON output gains `document_type` and a
+`checkboxes` key:
+
+```json
+{
+  "file": "anexo.jpg",
+  "detect_time_ms": 123.4,
+  "document_type": "form",
+  "lines": [ ... ],
+  "checkboxes": [
+    { "state": "checked", "box": [[64,1425],[99,1425],[99,1446],[64,1446]],
+      "ink_ratio": 0.087, "confidence": 0.67,
+      "source": "main", "snapped": true }
+  ]
+}
+```
+
+`ink_ratio` is the measured value, not just the verdict: if a box comes back
+misclassified, that number says exactly where to put `--checkbox-ink-thresh`.
+`source` distinguishes what the model saw at normal confidence (`main`) from
+what the heuristics recovered (`rescue`).
+
+There are a lot of knobs, so there are also three presets:
+`--checkbox-profile strict` (no rescue, `conf 0.35`, `form-min 5` — maximum
+precision), `balanced` (the defaults above, validated on three real forms),
+and `aggressive` (`conf 0.15`, `rescue-conf 0.03`, `rescue-min-cluster 1` —
+maximum recall, for hard forms that get human review afterwards). The profile
+sets the base values and any explicit flag overrides it, so you can start from
+a preset and change a single thing.
+
+To tune any of this, use `--debug-overlay` to see the boxes and
+`--debug-checkbox-candidates` to see what was thrown away and why
+(`saturation`, `below-conf`, `rescue-pruned`, `nms`) — if a box is missing,
+the JSON tells you whether the model never saw it or a filter dropped it.
+
+Known limits, measured on the reference documents: recall is 100% on two
+forms and 80% on a dense one (boxes that share a border inside a table have
+their contours fused), with 3 false positives on that same document (a field
+border, three merged dates, and a handwritten signature — all achromatic, so
+the saturation filter does not catch them).
+
+Cell detection assumes **natively digital** documents (a PDF or spreadsheet
+rendered to an image: straight borders, no skew, no scanner noise). A
+skewed scan breaks the geometric premises; there is no deskew step in the
+pipeline today.
 
 PDF input is out of scope for this tool (the base engine has no PDF
 support); rasterize pages to images first if you need that. This may be

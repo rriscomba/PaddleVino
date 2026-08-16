@@ -10,6 +10,11 @@ on:
         description: "PP-OCRv6 model tier to bundle (tiny/small/medium)"
         required: false
         default: "small"
+      bundle_checkbox_model:
+        description: "Also bundle the checkbox detection model (+10.8 MB, AGPL-3.0)"
+        required: false
+        type: boolean
+        default: false
 
 permissions:
   contents: write
@@ -26,6 +31,9 @@ env:
   ORT_OPENVINO_PACKAGE: "intel.ml.onnxruntime.openvino"
   ORT_OPENVINO_VERSION: "1.24.1"
   MODEL_TIER: ${{ github.event.inputs.model_tier || 'small' }}
+  # Opt-in: the checkbox model is AGPL-3.0 and ~10.8 MB, and --detect-checkboxes
+  # is off by default, so plain pushes ship without it.
+  BUNDLE_CHECKBOX: ${{ github.event.inputs.bundle_checkbox_model || 'false' }}
 
 jobs:
   build:
@@ -83,7 +91,11 @@ jobs:
       - name: Download PP-OCRv6 models
         shell: pwsh
         run: |
-          powershell -ExecutionPolicy Bypass -File models/download_models.ps1 -Tier $env:MODEL_TIER
+          if ($env:BUNDLE_CHECKBOX -eq "true") {
+            powershell -ExecutionPolicy Bypass -File models/download_models.ps1 -Tier $env:MODEL_TIER -Checkbox
+          } else {
+            powershell -ExecutionPolicy Bypass -File models/download_models.ps1 -Tier $env:MODEL_TIER
+          }
 
       - name: Configure (CMake)
         shell: pwsh
@@ -109,11 +121,18 @@ jobs:
           Copy-Item build/Release/*.xml $pkg/ -ErrorAction SilentlyContinue
           Copy-Item C:/vcpkg/installed/x64-windows/bin/*.dll $pkg/ -ErrorAction SilentlyContinue
           New-Item -ItemType Directory -Force -Path "$pkg/models" | Out-Null
-          Copy-Item models/*.onnx "$pkg/models/" -ErrorAction SilentlyContinue
+          Copy-Item models/det.onnx, models/rec.onnx, models/cls.onnx "$pkg/models/" -ErrorAction SilentlyContinue
           Copy-Item models/ppocrv6_dict.txt "$pkg/models/" -ErrorAction SilentlyContinue
+          # Staged only when the workflow was dispatched with
+          # bundle_checkbox_model, so the default zip stays free of the
+          # AGPL-3.0 model and its 10.8 MB.
+          if ($env:BUNDLE_CHECKBOX -eq "true") {
+            Copy-Item models/checkbox.onnx "$pkg/models/"
+          }
           Copy-Item README.md $pkg/ -ErrorAction SilentlyContinue
           Copy-Item CHANGELOG.md $pkg/ -ErrorAction SilentlyContinue
           Copy-Item LICENSE $pkg/ -ErrorAction SilentlyContinue
+          Copy-Item THIRD_PARTY_LICENSES $pkg/ -Recurse -ErrorAction SilentlyContinue
           Compress-Archive -Path "$pkg/*" -DestinationPath "dist/paddlevino-windows-x64.zip" -Force
 
       - name: Upload build artifact

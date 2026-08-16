@@ -4,18 +4,30 @@
 # directory, alongside the matching character dictionary.
 #
 # Usage:
-#   ./models/download_models.sh [tiny|small|medium]
+#   ./models/download_models.sh [tiny|small|medium] [checkbox]
 #
 # Source of truth for these URLs:
 #   https://github.com/RapidAI/RapidOCR/blob/main/python/rapidocr/default_models.yaml
 # Models are hosted on ModelScope under the RapidAI/RapidOCR model repo.
+#
+# The trailing "checkbox" argument additionally downloads the optional
+# checkbox detection model used by --detect-checkboxes. It is opt-in on
+# purpose: ~10.8 MB most users do not need, and it is AGPL-3.0 licensed (see
+# THIRD_PARTY_LICENSES/checkbox-detector-LICENSE-AGPL-3.0.txt).
 set -euo pipefail
 
 TIER="${1:-small}"
 case "$TIER" in
     tiny|small|medium) ;;
-    *) echo "Usage: $0 [tiny|small|medium]" >&2; exit 1 ;;
+    *) echo "Usage: $0 [tiny|small|medium] [checkbox]" >&2; exit 1 ;;
 esac
+
+WANT_CHECKBOX=0
+if [ "${2:-}" = "checkbox" ]; then
+    WANT_CHECKBOX=1
+elif [ -n "${2:-}" ]; then
+    echo "Usage: $0 [tiny|small|medium] [checkbox]" >&2; exit 1
+fi
 
 DEST_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 BASE="https://www.modelscope.cn/models/RapidAI/RapidOCR/resolve/v3.9.2"
@@ -46,5 +58,11 @@ download "$DET_URL"  "$DEST_DIR/det.onnx"
 download "$REC_URL"  "$DEST_DIR/rec.onnx"
 download "$CLS_URL"  "$DEST_DIR/cls.onnx"
 download "$DICT_URL" "$DEST_DIR/ppocrv6_dict.txt"
+
+if [ "$WANT_CHECKBOX" = "1" ]; then
+    CHECKBOX_URL="https://huggingface.co/wendys-llc/checkbox-detector/resolve/main/checkbox_yolo12n.onnx"
+    download "$CHECKBOX_URL" "$DEST_DIR/checkbox.onnx"
+    echo "Checkbox model downloaded. It is AGPL-3.0 licensed - see THIRD_PARTY_LICENSES/."
+fi
 
 echo "Done. Models placed in $DEST_DIR (tier: $TIER)."

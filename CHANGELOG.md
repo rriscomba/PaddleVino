@@ -1,6 +1,55 @@
 # Changelog
 
-## Unreleased
+## Unreleased (0.2.0)
+
+- **License change: MIT → AGPL-3.0.** Required by the optional checkbox
+  detection model (YOLO12n from
+  [wendys-llc/checkbox-detector](https://huggingface.co/wendys-llc/checkbox-detector),
+  exported by Ultralytics and declaring AGPL-3.0). The inherited OCR engine
+  stays Apache-2.0 and keeps its notice in `THIRD_PARTY_LICENSES/`; the
+  model's license text was added there too. Everything already published
+  under MIT remains MIT permanently — the change applies going forward only.
+- **New: cell structure detection** (`--detect-cells`). Finds field boxes and
+  table cells by morphology — no model, no new dependency, no extra download.
+  Reports them under a new JSON `cells` key, and in `--format reading`
+  collapses the text runs inside a cell into a single element, which stops a
+  two-line field from dragging its whole row out of alignment. All six
+  morphology parameters are exposed as flags (`--cell-h-frac`,
+  `--cell-v-frac`, `--cell-min-width`, `--cell-min-height`,
+  `--cell-max-area`, `--cell-rectangularity`). Measured on the reference
+  documents: 18 / 17 / 55 cells on three forms, and **0** on a plain-text
+  page.
+- **New: checkbox detection** (`--detect-checkboxes`, model file named by
+  `--checkbox-model`, default `checkbox.onnx` in `--models-dir`). A YOLO12n
+  model says what and where; ink density inside the box says whether it is
+  ticked. Adds `document_type` and a `checkboxes` key (with `ink_ratio`,
+  `confidence`, `source` and `snapped` for traceability) to the JSON, and
+  injects each checkbox into `--format reading` as `[x]` / `[ ]` at its real
+  position. Runs through the same ONNX Runtime path as the OCR models, so it
+  honours `--engine openvino`. Three false-positive filters: mean HSV
+  saturation, a document-type gate that only enables the low-confidence
+  rescue once the conservative pass has already found several boxes, and
+  snapping the network's loose box to the real rectangle before measuring
+  ink. Every calibrated constant is a flag; `--checkbox-profile
+  strict|balanced|aggressive` gives presets, and any explicit flag overrides
+  the profile.
+- **New: diagnostics.** `--debug-overlay <file>` writes the page with the
+  detected boxes drawn on it (checkboxes green/red with their ink ratio and
+  confidence, cells in blue); `--debug-checkbox-candidates` also emits the
+  discarded candidates in the JSON with the reason each was dropped
+  (`saturation`, `below-conf`, `rescue-pruned`, `nms`).
+- All of the above default to off. With no new flag passed, `json`, `txt` and
+  `reading` output is byte-for-byte what 0.1.0 produced (verified by diffing
+  both binaries on the same images).
+- `models/download_models.ps1` / `.sh` gained an opt-in `-Checkbox` /
+  `checkbox` switch for the checkbox model, and the Windows CI workflow a
+  `bundle_checkbox_model` dispatch input that stages it into the release zip.
+- Known limits: these detectors assume natively digital documents (straight
+  borders, no skew, no scanner noise); there is no deskew step. Recall on the
+  reference forms is 100% / 100% / 80%, with 3 achromatic false positives on
+  the dense one that the saturation filter cannot catch.
+
+## 0.1.0
 
 - Initial release of PaddleVino, adapted from
   [RapidAI/RapidOcrOnnx](https://github.com/RapidAI/RapidOcrOnnx).

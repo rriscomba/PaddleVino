@@ -13,6 +13,10 @@
 #include "OcrLite.h"
 #include "OcrUtils.h"
 #include "EngineType.h"
+#include "CellDetector.h"
+#include "CheckboxDetector.h"
+#include <opencv2/imgcodecs.hpp>
+#include <opencv2/imgproc.hpp>
 
 #ifdef _WIN32
 #include <windows.h>
@@ -42,6 +46,32 @@ struct Options {
     bool doAngle = true;
     bool mostAngle = true;
     float readingRowOverlap = 0.5f;
+    // Only used once --detect-cells / --detect-checkboxes restructure the
+    // reading output; plain --format reading keeps its two-space join.
+    float readingColumnGap = 0.8f;
+
+    // --- cell structure detection (off by default) ---
+    bool detectCellsEnabled = false;
+    CellDetectorParams cellParams;
+
+    // --- checkbox detection (off by default) ---
+    bool detectCheckboxesEnabled = false;
+    std::string checkboxModelName = "checkbox.onnx";
+    CheckboxParams checkboxParams;
+
+    // --- diagnostics (off by default) ---
+    std::string debugOverlay;
+    bool debugCheckboxCandidates = false;
+};
+
+// Per-page results produced by the optional detectors. Empty/disabled by
+// default, so the JSON stays byte-for-byte identical when no new flag is used.
+struct PageExtras {
+    bool hasCells = false;
+    std::vector<Cell> cells;
+    bool hasCheckboxes = false;
+    CheckboxResult checkboxes;
+    bool debugCandidates = false;
 };
 
 void printHelp(FILE *out, const char *argv0) {
@@ -126,14 +156,27 @@ float averageConfidence(const std::vector<float> &charScores) {
     return sum / static_cast<float>(charScores.size());
 }
 
-std::string resultToJson(const std::string &file, const OcrResult &result, bool ok, const std::string &error) {
+// Serializes an axis-aligned rectangle as the same 4-point polygon shape the
+// "lines" boxes already use: top-left, top-right, bottom-right, bottom-left.
+void writeRectPoints(std::ostringstream &out, double x1, double y1, double x2, double y2) {
+    out << "[[" << x1 << "," << y1 << "],[" << x2 << "," << y1 << "],["
+        << x2 << "," << y2 << "],[" << x1 << "," << y2 << "]]";
+}
+
+std::string resultToJson(const std::string &file, const OcrResult &result, bool ok, const std::string &error,
+                         const PageExtras &extras) {
     std::ostringstream out;
     out << "{\"file\":\"" << jsonEscape(file) << "\",";
     if (!ok) {
         out << "\"error\":\"" << jsonEscape(error) << "\",\"lines\":[]}";
         return out.str();
     }
-    out << "\"detect_time_ms\":" << result.detectTime << ",\"lines\":[";
+    out << "\"detect_time_ms\":" << result.detectTime << ",";
+    if (extras.hasCheckboxes) {
+        // Result of the §6.4 gate: shows at a glance whether the rescue ran.
+        out << "\"document_type\":\"" << (extras.checkboxes.isForm ? "form" : "text") << "\",";
+    }
+    out << "\"lines\":[";
     for (size_t i = 0; i < result.textBlocks.size(); ++i) {
         const TextBlock &b = result.textBlocks[i];
         if (i > 0) out << ",";
@@ -147,7 +190,45 @@ std::string resultToJson(const std::string &file, const OcrResult &result, bool 
         }
         out << "]}";
     }
-    out << "]}";
+    out << "]";
+    if (extras.hasCheckboxes) {
+        out << ",\"checkboxes\":[";
+        for (size_t i = 0; i < extras.checkboxes.checkboxes.size(); ++i) {
+            const Checkbox &c = extras.checkboxes.checkboxes[i];
+            if (i > 0) out << ",";
+            out << "{\"state\":\"" << (c.checked ? "checked" : "unchecked") << "\",\"box\":";
+            writeRectPoints(out, c.x1, c.y1, c.x2, c.y2);
+            out << ",\"ink_ratio\":" << c.inkRatio
+                << ",\"confidence\":" << c.confidence
+                << ",\"source\":\"" << (c.fromRescue ? "rescue" : "main") << "\""
+                << ",\"snapped\":" << (c.snapped ? "true" : "false") << "}";
+        }
+        out << "]";
+        if (extras.debugCandidates) {
+            out << ",\"checkbox_candidates\":[";
+            for (size_t i = 0; i < extras.checkboxes.discarded.size(); ++i) {
+                const CheckboxCandidate &c = extras.checkboxes.discarded[i];
+                if (i > 0) out << ",";
+                out << "{\"state\":\"" << (c.classId == 0 ? "checked" : "unchecked") << "\",\"box\":";
+                writeRectPoints(out, c.x1, c.y1, c.x2, c.y2);
+                out << ",\"confidence\":" << c.confidence
+                    << ",\"reason\":\"" << jsonEscape(c.reason) << "\"}";
+            }
+            out << "]";
+        }
+    }
+    if (extras.hasCells) {
+        out << ",\"cells\":[";
+        for (size_t i = 0; i < extras.cells.size(); ++i) {
+            const Cell &c = extras.cells[i];
+            if (i > 0) out << ",";
+            out << "{\"box\":";
+            writeRectPoints(out, c.x, c.y, c.x + c.width, c.y + c.height);
+            out << "}";
+        }
+        out << "]";
+    }
+    out << "}";
     return out.str();
 }
 
@@ -162,6 +243,41 @@ std::string resultToText(const std::string &file, const OcrResult &result, bool 
         out << b.text << "\t(confidence=" << averageConfidence(b.charScores) << ")\n";
     }
     return out.str();
+}
+
+// --debug-overlay names a single file, but --input can be a whole directory.
+// With more than one image the index is appended to the stem so the pages
+// don't overwrite each other.
+std::string overlayPath(const std::string &base, size_t index, size_t total) {
+    if (total <= 1) return base;
+    fs::path p(base);
+    std::string stem = p.stem().string();
+    std::string ext = p.extension().string();
+    if (ext.empty()) ext = ".png";
+    fs::path parent = p.parent_path();
+    std::string name = stem + "_" + std::to_string(index) + ext;
+    return parent.empty() ? name : (parent / name).string();
+}
+
+// Draws what the optional detectors found on top of the page: cells in blue.
+// Tuning ~25 numeric knobs blind is not viable; this is the tool that makes
+// them adjustable.
+void writeDebugOverlay(const std::string &path, const cv::Mat &pageBgr, const PageExtras &extras) {
+    cv::Mat vis = pageBgr.clone();
+    for (const Cell &c: extras.cells) {
+        cv::rectangle(vis, cv::Rect(c.x, c.y, c.width, c.height), cv::Scalar(255, 0, 0), 2);
+    }
+    for (const Checkbox &c: extras.checkboxes.checkboxes) {
+        const cv::Scalar color = c.checked ? cv::Scalar(0, 200, 0) : cv::Scalar(0, 0, 255);
+        cv::rectangle(vis, cv::Rect(c.x1, c.y1, c.x2 - c.x1, c.y2 - c.y1), color, 2);
+        char label[64];
+        snprintf(label, sizeof(label), "%.2f/%.2f", c.inkRatio, c.confidence);
+        cv::putText(vis, label, cv::Point(c.x1, (std::max)(10, c.y1 - 3)), cv::FONT_HERSHEY_SIMPLEX,
+                    0.35, color, 1, cv::LINE_AA);
+    }
+    if (!cv::imwrite(path, vis)) {
+        fprintf(stderr, "Could not write debug overlay: %s\n", path.c_str());
+    }
 }
 
 // Groups detected text blocks into reading-order rows: blocks whose boxes'
@@ -238,8 +354,150 @@ std::vector<std::vector<size_t>> groupIntoRows(const std::vector<TextBlock> &blo
     return rows;
 }
 
+struct Bounds {
+    int x1, y1, x2, y2;
+};
+
+Bounds boundsOf(const std::vector<cv::Point> &pts) {
+    Bounds b{pts.front().x, pts.front().y, pts.front().x, pts.front().y};
+    for (const cv::Point &p: pts) {
+        b.x1 = (std::min)(b.x1, p.x);
+        b.y1 = (std::min)(b.y1, p.y);
+        b.x2 = (std::max)(b.x2, p.x);
+        b.y2 = (std::max)(b.y2, p.y);
+    }
+    return b;
+}
+
+std::vector<cv::Point> rectPoints(int x1, int y1, int x2, int y2) {
+    return {cv::Point(x1, y1), cv::Point(x2, y1), cv::Point(x2, y2), cv::Point(x1, y2)};
+}
+
+// Builds the elements that go into groupIntoRows() when the optional
+// detectors are active. Two transformations, both from the Python prototype
+// (merge_celdas.py):
+//
+//  1. text runs whose centre falls inside the same cell are collapsed into a
+//     single synthetic block (joined by spaces, top-to-bottom then
+//     left-to-right, box = the cell), so a two-line address field stops
+//     dragging its whole row out of alignment;
+//  2. a cell that CONTAINS checkboxes is not a field with one value but a
+//     frame grouping several options (the annexes list at the foot of a
+//     form). Collapsing it wrecks that section, so its runs are left loose.
+//
+// The result is fed to groupIntoRows() unmodified.
+std::vector<TextBlock> buildReadingBlocks(const std::vector<TextBlock> &blocks, const PageExtras &extras,
+                                          std::vector<bool> &isCellOut) {
+    std::vector<TextBlock> outBlocks;
+    isCellOut.clear();
+
+    // A cell that CONTAINS checkboxes is not a field with one value but a
+    // frame grouping several options, so it must not collapse.
+    std::vector<bool> isContainer(extras.cells.size(), false);
+    for (const Checkbox &cb: extras.checkboxes.checkboxes) {
+        const double ccx = (cb.x1 + cb.x2) / 2.0, ccy = (cb.y1 + cb.y2) / 2.0;
+        for (size_t c = 0; c < extras.cells.size(); ++c) {
+            const Cell &cell = extras.cells[c];
+            if (ccx >= cell.x && ccx <= cell.x + cell.width && ccy >= cell.y && ccy <= cell.y + cell.height) {
+                isContainer[c] = true;
+            }
+        }
+    }
+
+    std::vector<std::vector<size_t>> perCell(extras.cells.size());
+    for (size_t i = 0; i < blocks.size(); ++i) {
+        Bounds b = boundsOf(blocks[i].boxPoint);
+        const double cx = (b.x1 + b.x2) / 2.0, cy = (b.y1 + b.y2) / 2.0;
+        long long bestArea = 0;
+        int best = -1;
+        for (size_t c = 0; c < extras.cells.size(); ++c) {
+            if (isContainer[c]) continue;
+            const Cell &cell = extras.cells[c];
+            if (cx < cell.x || cx > cell.x + cell.width || cy < cell.y || cy > cell.y + cell.height) continue;
+            const long long area = (long long) cell.width * cell.height;
+            if (best < 0 || area < bestArea) {
+                best = (int) c;
+                bestArea = area;
+            }
+        }
+        if (best < 0) {
+            outBlocks.push_back(blocks[i]);
+            isCellOut.push_back(false);
+        } else {
+            perCell[best].push_back(i);
+        }
+    }
+
+    for (size_t c = 0; c < perCell.size(); ++c) {
+        if (perCell[c].empty()) continue;
+        std::vector<size_t> items = perCell[c];
+        std::sort(items.begin(), items.end(), [&](size_t a, size_t b) {
+            Bounds ba = boundsOf(blocks[a].boxPoint), bb = boundsOf(blocks[b].boxPoint);
+            const double ca = (ba.y1 + ba.y2) / 2.0, cb = (bb.y1 + bb.y2) / 2.0;
+            if (ca != cb) return ca < cb;
+            return ba.x1 < bb.x1;
+        });
+        std::string text;
+        for (size_t idx: items) {
+            if (blocks[idx].text.empty()) continue;
+            if (!text.empty()) text += " ";
+            text += blocks[idx].text;
+        }
+        if (text.empty()) continue;
+        const Cell &cell = extras.cells[c];
+        TextBlock tb{};
+        tb.boxPoint = rectPoints(cell.x, cell.y, cell.x + cell.width, cell.y + cell.height);
+        tb.text = text;
+        outBlocks.push_back(tb);
+        isCellOut.push_back(true);
+    }
+
+    // A checkbox is just another synthetic TextBlock. groupIntoRows() then
+    // puts it on its row at its horizontal position with no changes at all --
+    // there is no "pair the checkbox with its label" logic to write, because
+    // the position already answers it.
+    for (const Checkbox &cb: extras.checkboxes.checkboxes) {
+        TextBlock tb{};
+        tb.boxPoint = rectPoints(cb.x1, cb.y1, cb.x2, cb.y2);
+        tb.text = cb.checked ? "[x]" : "[ ]";
+        outBlocks.push_back(tb);
+        isCellOut.push_back(false);
+    }
+
+    return outBlocks;
+}
+
+// Renders one row. A cell is a structural unit (label vs. field) and is always
+// separated with " | "; between two loose text runs the horizontal gap decides,
+// measured in line heights, because a wide gap in running text can just be
+// paragraph spacing.
+std::string renderReadingRow(const std::vector<TextBlock> &blocks, const std::vector<bool> &isCell,
+                             const std::vector<size_t> &row, float columnGapRatio) {
+    std::vector<double> heights;
+    for (size_t idx: row) {
+        Bounds b = boundsOf(blocks[idx].boxPoint);
+        heights.push_back((std::max)(1.0, (double) (b.y2 - b.y1)));
+    }
+    std::sort(heights.begin(), heights.end());
+    const double refH = heights[heights.size() / 2];
+
+    std::string outText = blocks[row.front()].text;
+    for (size_t i = 1; i < row.size(); ++i) {
+        const size_t prev = row[i - 1], cur = row[i];
+        std::string sep;
+        if (isCell[prev] || isCell[cur]) {
+            sep = " | ";
+        } else {
+            const double gap = (double) boundsOf(blocks[cur].boxPoint).x1 - boundsOf(blocks[prev].boxPoint).x2;
+            sep = gap > columnGapRatio * refH ? " | " : " ";
+        }
+        outText += sep + blocks[cur].text;
+    }
+    return outText;
+}
+
 std::string resultToReading(const std::string &file, const OcrResult &result, bool ok, const std::string &error,
-                            float rowOverlapThresh) {
+                            float rowOverlapThresh, const PageExtras &extras, float columnGapRatio) {
     std::ostringstream out;
     if (!ok) {
         out << "confidence=0.00% (error)\n" << "ERROR (" << file << "): " << error << "\n";
@@ -250,14 +508,52 @@ std::string resultToReading(const std::string &file, const OcrResult &result, bo
     float avgConfidence = result.textBlocks.empty() ? 0.0f : sum / (float) result.textBlocks.size();
     out << "confidence=" << (avgConfidence * 100.0f) << "%\n";
 
-    for (const std::vector<size_t> &row: groupIntoRows(result.textBlocks, rowOverlapThresh)) {
-        for (size_t i = 0; i < row.size(); ++i) {
-            if (i > 0) out << "  ";
-            out << result.textBlocks[row[i]].text;
+    // Without any of the optional detectors this is byte-for-byte the
+    // original behaviour: no restructuring, runs joined by two spaces.
+    if (!extras.hasCells && !extras.hasCheckboxes) {
+        for (const std::vector<size_t> &row: groupIntoRows(result.textBlocks, rowOverlapThresh)) {
+            for (size_t i = 0; i < row.size(); ++i) {
+                if (i > 0) out << "  ";
+                out << result.textBlocks[row[i]].text;
+            }
+            out << "\n";
         }
-        out << "\n";
+        return out.str();
+    }
+
+    std::vector<bool> isCell;
+    std::vector<TextBlock> blocks = buildReadingBlocks(result.textBlocks, extras, isCell);
+    for (const std::vector<size_t> &row: groupIntoRows(blocks, rowOverlapThresh)) {
+        out << renderReadingRow(blocks, isCell, row, columnGapRatio) << "\n";
     }
     return out.str();
+}
+
+// With ~25 knobs, making the user discover them one by one is bad usability.
+// A profile sets the base values; any explicit flag then overrides it, so you
+// can start from a preset and adjust a single thing. Applied in a pre-pass for
+// exactly that reason: profile first, individual flags after.
+bool applyCheckboxProfile(const std::string &name, CheckboxParams &p) {
+    if (name == "balanced") {
+        // The validated defaults; nothing to change.
+        return true;
+    }
+    if (name == "strict") {
+        // Maximum precision: for batches where a spurious "[ ]" in a
+        // promissory note is worse than missing a box.
+        p.rescueEnabled = false;
+        p.conf = 0.35f;
+        p.formMin = 5;
+        return true;
+    }
+    if (name == "aggressive") {
+        // Maximum recall, for hard forms that get human review afterwards.
+        p.conf = 0.15f;
+        p.rescueConf = 0.03f;
+        p.rescueMinCluster = 1;
+        return true;
+    }
+    return false;
 }
 
 } // namespace
@@ -272,6 +568,21 @@ int main(int argc, char **argv) {
 #endif
 
     Options opt;
+
+    // Pre-pass: the profile only sets base values, so it must be applied
+    // before the individual flags are read, no matter where it appears.
+    for (int i = 1; i < argc; ++i) {
+        if (std::string(argv[i]) != "--checkbox-profile") continue;
+        if (i + 1 >= argc) {
+            fprintf(stderr, "Missing value for --checkbox-profile\n");
+            return 1;
+        }
+        if (!applyCheckboxProfile(argv[i + 1], opt.checkboxParams)) {
+            fprintf(stderr, "--checkbox-profile must be 'strict', 'balanced' or 'aggressive'\n");
+            return 1;
+        }
+    }
+
     for (int i = 1; i < argc; ++i) {
         std::string arg = argv[i];
         auto next = [&](const char *flagName) -> std::string {
@@ -300,6 +611,50 @@ int main(int argc, char **argv) {
         else if (arg == "--no-angle") opt.doAngle = false;
         else if (arg == "--no-most-angle") opt.mostAngle = false;
         else if (arg == "--reading-row-overlap") opt.readingRowOverlap = std::stof(next("--reading-row-overlap"));
+        else if (arg == "--reading-column-gap") opt.readingColumnGap = std::stof(next("--reading-column-gap"));
+        else if (arg == "--detect-cells") opt.detectCellsEnabled = true;
+        else if (arg == "--cell-h-frac") opt.cellParams.hFrac = std::stoi(next("--cell-h-frac"));
+        else if (arg == "--cell-v-frac") opt.cellParams.vFrac = std::stoi(next("--cell-v-frac"));
+        else if (arg == "--cell-min-width") opt.cellParams.minWidthFrac = std::stof(next("--cell-min-width"));
+        else if (arg == "--cell-min-height") opt.cellParams.minHeightFrac = std::stof(next("--cell-min-height"));
+        else if (arg == "--cell-max-area") opt.cellParams.maxAreaFrac = std::stof(next("--cell-max-area"));
+        else if (arg == "--cell-rectangularity") opt.cellParams.rectangularity = std::stof(next("--cell-rectangularity"));
+        else if (arg == "--detect-checkboxes") opt.detectCheckboxesEnabled = true;
+        else if (arg == "--checkbox-model") opt.checkboxModelName = next("--checkbox-model");
+        else if (arg == "--checkbox-profile") next("--checkbox-profile");// already applied in the pre-pass
+        else if (arg == "--checkbox-conf") opt.checkboxParams.conf = std::stof(next("--checkbox-conf"));
+        else if (arg == "--checkbox-iou") opt.checkboxParams.iou = std::stof(next("--checkbox-iou"));
+        else if (arg == "--checkbox-max-saturation")
+            opt.checkboxParams.maxSaturation = std::stof(next("--checkbox-max-saturation"));
+        else if (arg == "--checkbox-input-size") opt.checkboxParams.inputSize = std::stoi(next("--checkbox-input-size"));
+        else if (arg == "--checkbox-form-min") opt.checkboxParams.formMin = std::stoi(next("--checkbox-form-min"));
+        else if (arg == "--no-checkbox-rescue") opt.checkboxParams.rescueEnabled = false;
+        else if (arg == "--checkbox-rescue-conf") opt.checkboxParams.rescueConf = std::stof(next("--checkbox-rescue-conf"));
+        else if (arg == "--checkbox-rescue-min-cluster")
+            opt.checkboxParams.rescueMinCluster = std::stoi(next("--checkbox-rescue-min-cluster"));
+        else if (arg == "--checkbox-rescue-x-tol")
+            opt.checkboxParams.rescueXTol = std::stof(next("--checkbox-rescue-x-tol"));
+        else if (arg == "--checkbox-rescue-spacing-tol")
+            opt.checkboxParams.rescueSpacingTol = std::stof(next("--checkbox-rescue-spacing-tol"));
+        else if (arg == "--checkbox-dedup-y-frac")
+            opt.checkboxParams.dedupYFrac = std::stof(next("--checkbox-dedup-y-frac"));
+        else if (arg == "--no-checkbox-snap") opt.checkboxParams.snapEnabled = false;
+        else if (arg == "--checkbox-snap-margin") opt.checkboxParams.snapMargin = std::stoi(next("--checkbox-snap-margin"));
+        else if (arg == "--checkbox-snap-min-area")
+            opt.checkboxParams.snapMinArea = std::stof(next("--checkbox-snap-min-area"));
+        else if (arg == "--checkbox-snap-max-area")
+            opt.checkboxParams.snapMaxArea = std::stof(next("--checkbox-snap-max-area"));
+        else if (arg == "--checkbox-snap-min-aspect")
+            opt.checkboxParams.snapMinAspect = std::stof(next("--checkbox-snap-min-aspect"));
+        else if (arg == "--checkbox-snap-max-aspect")
+            opt.checkboxParams.snapMaxAspect = std::stof(next("--checkbox-snap-max-aspect"));
+        else if (arg == "--checkbox-snap-rectangularity")
+            opt.checkboxParams.snapRectangularity = std::stof(next("--checkbox-snap-rectangularity"));
+        else if (arg == "--checkbox-ink-thresh") opt.checkboxParams.inkThresh = std::stof(next("--checkbox-ink-thresh"));
+        else if (arg == "--checkbox-ink-border") opt.checkboxParams.inkBorder = std::stof(next("--checkbox-ink-border"));
+        else if (arg == "--checkbox-ink-dark") opt.checkboxParams.inkDark = std::stoi(next("--checkbox-ink-dark"));
+        else if (arg == "--debug-overlay") opt.debugOverlay = next("--debug-overlay");
+        else if (arg == "--debug-checkbox-candidates") opt.debugCheckboxCandidates = true;
         else if (arg == "--version" || arg == "-v") {
             printf("%s\n", VERSION);
             return 0;
@@ -346,6 +701,12 @@ int main(int argc, char **argv) {
         }
     }
 
+    std::string checkboxPath = opt.modelsDir + "/" + opt.checkboxModelName;
+    if (opt.detectCheckboxesEnabled && !isFileExists(checkboxPath)) {
+        fprintf(stderr, "checkbox model not found: %s\n", checkboxPath.c_str());
+        return 1;
+    }
+
     std::vector<std::string> images = collectImages(opt.input, opt.recursive);
     if (images.empty()) {
         fprintf(stderr, "No input images found at: %s\n", opt.input.c_str());
@@ -360,6 +721,18 @@ int main(int argc, char **argv) {
             false);//isOutputResultImg
     ocrLite.setEngine(engine);
     ocrLite.initModels(detPath, clsPath, recPath, keysPath);
+
+    CheckboxNet checkboxNet;
+    if (opt.detectCheckboxesEnabled) {
+        checkboxNet.setNumThread(opt.numThread);
+        checkboxNet.setEngine(engine);
+        try {
+            checkboxNet.initModel(checkboxPath);
+        } catch (const std::exception &e) {
+            fprintf(stderr, "Could not load checkbox model %s: %s\n", checkboxPath.c_str(), e.what());
+            return 1;
+        }
+    }
 
     std::ostream *out = &std::cout;
     std::ofstream outFile;
@@ -390,11 +763,44 @@ int main(int argc, char **argv) {
             ok = false;
             error = e.what();
         }
+
+        // The optional detectors work on the source pixels, but
+        // OcrLite::detect() takes paths and does not hand the decoded image
+        // back, so the page is read once more here. TextBlock::boxPoint is
+        // already in original-image coordinates (the engine reverts both the
+        // padding and the maxSideLen resize), so no transform is needed to
+        // put OCR boxes and CV boxes in the same space.
+        PageExtras extras;
+        const bool needsPixels = opt.detectCellsEnabled || opt.detectCheckboxesEnabled || !opt.debugOverlay.empty();
+        if (ok && needsPixels) {
+            cv::Mat pageBgr = cv::imread(imgPath, cv::IMREAD_COLOR);
+            if (pageBgr.empty()) {
+                fprintf(stderr, "Could not re-read image for cell/checkbox detection: %s\n", imgPath.c_str());
+            } else {
+                cv::Mat gray;
+                cv::cvtColor(pageBgr, gray, cv::COLOR_BGR2GRAY);
+                if (opt.detectCellsEnabled) {
+                    extras.hasCells = true;
+                    extras.cells = detectCells(gray, opt.cellParams);
+                }
+                if (opt.detectCheckboxesEnabled) {
+                    extras.hasCheckboxes = true;
+                    extras.debugCandidates = opt.debugCheckboxCandidates;
+                    extras.checkboxes = detectCheckboxes(checkboxNet, pageBgr, opt.checkboxParams,
+                                                          opt.debugCheckboxCandidates);
+                }
+                if (!opt.debugOverlay.empty()) {
+                    writeDebugOverlay(overlayPath(opt.debugOverlay, i, images.size()), pageBgr, extras);
+                }
+            }
+        }
+
         if (opt.format == "json") {
             if (i > 0) *out << ",";
-            *out << resultToJson(imgPath, result, ok, error);
+            *out << resultToJson(imgPath, result, ok, error, extras);
         } else if (opt.format == "reading") {
-            *out << resultToReading(imgPath, result, ok, error, opt.readingRowOverlap);
+            *out << resultToReading(imgPath, result, ok, error, opt.readingRowOverlap, extras,
+                                    opt.readingColumnGap);
         } else {
             *out << resultToText(imgPath, result, ok, error);
         }
