@@ -46,7 +46,24 @@ static const char *optionalMsg =
     "                         0.6-0.7) if unrelated lines are getting merged;\n"
     "                         lower it (e.g. 0.3-0.4) if runs on the same line\n"
     "                         (common with small/dense text) are staying split\n"
-    "                         (default: 0.5)\n";
+    "                         (default: 0.5)\n"
+    "\n"
+    "  Cell structure detection (all off by default):\n"
+    "  --detect-cells         Detect field/table cells by morphology and report\n"
+    "                         them under the JSON \"cells\" key\n"
+    "  --cell-h-frac <int>    Horizontal kernel divisor (width/N). This is the\n"
+    "                         filter that keeps false positives at zero on plain\n"
+    "                         text; lowering it relaxes that (default: 28)\n"
+    "  --cell-v-frac <int>    Vertical kernel divisor (height/N). The most\n"
+    "                         sensitive one: raise it if short field boxes are\n"
+    "                         being missed (default: 80)\n"
+    "  --cell-min-width <f>   Minimum cell width as a fraction of the page width\n"
+    "                         (default: 0.012)\n"
+    "  --cell-min-height <f>  Minimum cell height as a fraction of the page height\n"
+    "                         (default: 0.006)\n"
+    "  --cell-max-area <f>    Maximum cell area as a fraction of the page; drops\n"
+    "                         section frames (default: 0.6)\n"
+    "  --cell-rectangularity <f>  Minimum contourArea/boundingBoxArea (default: 0.7)\n";
 
 static const char *otherMsg =
     "  --version, -v           Print version and exit\n"

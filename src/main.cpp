@@ -13,6 +13,9 @@
 #include "OcrLite.h"
 #include "OcrUtils.h"
 #include "EngineType.h"
+#include "CellDetector.h"
+#include <opencv2/imgcodecs.hpp>
+#include <opencv2/imgproc.hpp>
 
 #ifdef _WIN32
 #include <windows.h>
@@ -42,6 +45,17 @@ struct Options {
     bool doAngle = true;
     bool mostAngle = true;
     float readingRowOverlap = 0.5f;
+
+    // --- cell structure detection (off by default) ---
+    bool detectCellsEnabled = false;
+    CellDetectorParams cellParams;
+};
+
+// Per-page results produced by the optional detectors. Empty/disabled by
+// default, so the JSON stays byte-for-byte identical when no new flag is used.
+struct PageExtras {
+    bool hasCells = false;
+    std::vector<Cell> cells;
 };
 
 void printHelp(FILE *out, const char *argv0) {
@@ -126,7 +140,15 @@ float averageConfidence(const std::vector<float> &charScores) {
     return sum / static_cast<float>(charScores.size());
 }
 
-std::string resultToJson(const std::string &file, const OcrResult &result, bool ok, const std::string &error) {
+// Serializes an axis-aligned rectangle as the same 4-point polygon shape the
+// "lines" boxes already use: top-left, top-right, bottom-right, bottom-left.
+void writeRectPoints(std::ostringstream &out, double x1, double y1, double x2, double y2) {
+    out << "[[" << x1 << "," << y1 << "],[" << x2 << "," << y1 << "],["
+        << x2 << "," << y2 << "],[" << x1 << "," << y2 << "]]";
+}
+
+std::string resultToJson(const std::string &file, const OcrResult &result, bool ok, const std::string &error,
+                         const PageExtras &extras) {
     std::ostringstream out;
     out << "{\"file\":\"" << jsonEscape(file) << "\",";
     if (!ok) {
@@ -147,7 +169,19 @@ std::string resultToJson(const std::string &file, const OcrResult &result, bool 
         }
         out << "]}";
     }
-    out << "]}";
+    out << "]";
+    if (extras.hasCells) {
+        out << ",\"cells\":[";
+        for (size_t i = 0; i < extras.cells.size(); ++i) {
+            const Cell &c = extras.cells[i];
+            if (i > 0) out << ",";
+            out << "{\"box\":";
+            writeRectPoints(out, c.x, c.y, c.x + c.width, c.y + c.height);
+            out << "}";
+        }
+        out << "]";
+    }
+    out << "}";
     return out.str();
 }
 
@@ -300,6 +334,13 @@ int main(int argc, char **argv) {
         else if (arg == "--no-angle") opt.doAngle = false;
         else if (arg == "--no-most-angle") opt.mostAngle = false;
         else if (arg == "--reading-row-overlap") opt.readingRowOverlap = std::stof(next("--reading-row-overlap"));
+        else if (arg == "--detect-cells") opt.detectCellsEnabled = true;
+        else if (arg == "--cell-h-frac") opt.cellParams.hFrac = std::stoi(next("--cell-h-frac"));
+        else if (arg == "--cell-v-frac") opt.cellParams.vFrac = std::stoi(next("--cell-v-frac"));
+        else if (arg == "--cell-min-width") opt.cellParams.minWidthFrac = std::stof(next("--cell-min-width"));
+        else if (arg == "--cell-min-height") opt.cellParams.minHeightFrac = std::stof(next("--cell-min-height"));
+        else if (arg == "--cell-max-area") opt.cellParams.maxAreaFrac = std::stof(next("--cell-max-area"));
+        else if (arg == "--cell-rectangularity") opt.cellParams.rectangularity = std::stof(next("--cell-rectangularity"));
         else if (arg == "--version" || arg == "-v") {
             printf("%s\n", VERSION);
             return 0;
@@ -390,9 +431,31 @@ int main(int argc, char **argv) {
             ok = false;
             error = e.what();
         }
+
+        // The optional detectors work on the source pixels, but
+        // OcrLite::detect() takes paths and does not hand the decoded image
+        // back, so the page is read once more here. TextBlock::boxPoint is
+        // already in original-image coordinates (the engine reverts both the
+        // padding and the maxSideLen resize), so no transform is needed to
+        // put OCR boxes and CV boxes in the same space.
+        PageExtras extras;
+        if (ok && opt.detectCellsEnabled) {
+            cv::Mat pageBgr = cv::imread(imgPath, cv::IMREAD_COLOR);
+            if (pageBgr.empty()) {
+                fprintf(stderr, "Could not re-read image for cell/checkbox detection: %s\n", imgPath.c_str());
+            } else {
+                cv::Mat gray;
+                cv::cvtColor(pageBgr, gray, cv::COLOR_BGR2GRAY);
+                if (opt.detectCellsEnabled) {
+                    extras.hasCells = true;
+                    extras.cells = detectCells(gray, opt.cellParams);
+                }
+            }
+        }
+
         if (opt.format == "json") {
             if (i > 0) *out << ",";
-            *out << resultToJson(imgPath, result, ok, error);
+            *out << resultToJson(imgPath, result, ok, error, extras);
         } else if (opt.format == "reading") {
             *out << resultToReading(imgPath, result, ok, error, opt.readingRowOverlap);
         } else {

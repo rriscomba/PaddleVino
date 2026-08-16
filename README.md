@@ -73,6 +73,19 @@ paddlevino.exe --input scan.png --format reading
 | `--version`, `-v` | Print version and exit | — |
 | `--help`, `-h` | Print usage and exit | — |
 
+Cell-structure detection (see "Cell structure detection" below). All of these
+are off by default, so behaviour without them is unchanged:
+
+| Flag | Description | Default |
+| --- | --- | --- |
+| `--detect-cells` | Detect field/table cells and report them under the JSON `cells` key | off |
+| `--cell-h-frac <int>` | Horizontal kernel divisor (`width/N`) | `28` |
+| `--cell-v-frac <int>` | Vertical kernel divisor (`height/N`) | `80` |
+| `--cell-min-width <f>` | Minimum cell width as a fraction of the page width | `0.012` |
+| `--cell-min-height <f>` | Minimum cell height as a fraction of the page height | `0.006` |
+| `--cell-max-area <f>` | Maximum cell area as a fraction of the page | `0.6` |
+| `--cell-rectangularity <f>` | Minimum `contourArea / boundingBoxArea` | `0.7` |
+
 JSON output is an array with one entry per processed image:
 
 ```json
@@ -115,6 +128,39 @@ to lines being merged or split incorrectly than normal body text. If you
 see that, tune `--reading-row-overlap` — raise it (e.g. `0.6`-`0.7`) if
 unrelated lines are being merged, lower it (e.g. `0.3`-`0.4`) if runs that
 belong on the same line are staying split — and re-run.
+
+## Cell structure detection
+
+`--detect-cells` finds the field boxes and table cells of a document from
+its ruling lines, using classic morphology only — no model, no extra
+dependency, no extra download. Opening the inverted-binary page with a long
+horizontal kernel leaves only the horizontal rules, likewise for vertical;
+the union is the table's skeleton, and the holes it encloses are the cells.
+
+The two kernels are deliberately asymmetric. The horizontal one is long
+(`width/28`) and does the real filtering: only a ruling line survives it, no
+text does — which is why a plain-text page yields zero cells. The vertical
+one is short (`height/80`) because the field boxes of typical forms are only
+~20 px tall; with a long vertical kernel their sides don't survive the
+opening, the cell never closes, and most short fields are lost.
+
+With `--detect-cells`, JSON output gains a `cells` key alongside `lines`:
+
+```json
+{
+  "file": "form.png",
+  "detect_time_ms": 123.4,
+  "lines": [ ... ],
+  "cells": [
+    { "box": [[255,520],[600,520],[600,550],[255,550]] }
+  ]
+}
+```
+
+Cell detection assumes **natively digital** documents (a PDF or spreadsheet
+rendered to an image: straight borders, no skew, no scanner noise). A
+skewed scan breaks the geometric premises; there is no deskew step in the
+pipeline today.
 
 PDF input is out of scope for this tool (the base engine has no PDF
 support); rasterize pages to images first if you need that. This may be
