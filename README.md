@@ -202,6 +202,16 @@ are structural units, so they are separated from their neighbours with ` | `;
 between two loose text runs the separator depends on the horizontal gap,
 controlled by `--reading-column-gap` (in line heights, default `0.8`).
 
+One exception: a cell that *contains* checkboxes is not a field with a value
+but a frame grouping several options (a form's list of annexes), so its runs
+are deliberately left loose. Without that rule, the whole list fuses into one
+line.
+
+`--detect-checkboxes` adds each checkbox to `--format reading` as a synthetic
+element reading `[x]` or `[ ]`, positioned at its real box. The existing
+row-clustering then places it next to its label with no extra logic — the
+position already answers "which label does this checkbox belong to".
+
 With cell grouping active, a lower `--reading-row-overlap` works better —
 around `0.25` in the prototype. The global default stays at `0.5` so plain
 `--format reading` is unchanged.

@@ -391,8 +391,18 @@ std::vector<TextBlock> buildReadingBlocks(const std::vector<TextBlock> &blocks, 
     std::vector<TextBlock> outBlocks;
     isCellOut.clear();
 
-    // Cells that hold a checkbox must not collapse.
+    // A cell that CONTAINS checkboxes is not a field with one value but a
+    // frame grouping several options, so it must not collapse.
     std::vector<bool> isContainer(extras.cells.size(), false);
+    for (const Checkbox &cb: extras.checkboxes.checkboxes) {
+        const double ccx = (cb.x1 + cb.x2) / 2.0, ccy = (cb.y1 + cb.y2) / 2.0;
+        for (size_t c = 0; c < extras.cells.size(); ++c) {
+            const Cell &cell = extras.cells[c];
+            if (ccx >= cell.x && ccx <= cell.x + cell.width && ccy >= cell.y && ccy <= cell.y + cell.height) {
+                isContainer[c] = true;
+            }
+        }
+    }
 
     std::vector<std::vector<size_t>> perCell(extras.cells.size());
     for (size_t i = 0; i < blocks.size(); ++i) {
@@ -442,6 +452,18 @@ std::vector<TextBlock> buildReadingBlocks(const std::vector<TextBlock> &blocks, 
         isCellOut.push_back(true);
     }
 
+    // A checkbox is just another synthetic TextBlock. groupIntoRows() then
+    // puts it on its row at its horizontal position with no changes at all --
+    // there is no "pair the checkbox with its label" logic to write, because
+    // the position already answers it.
+    for (const Checkbox &cb: extras.checkboxes.checkboxes) {
+        TextBlock tb{};
+        tb.boxPoint = rectPoints(cb.x1, cb.y1, cb.x2, cb.y2);
+        tb.text = cb.checked ? "[x]" : "[ ]";
+        outBlocks.push_back(tb);
+        isCellOut.push_back(false);
+    }
+
     return outBlocks;
 }
 
@@ -488,7 +510,7 @@ std::string resultToReading(const std::string &file, const OcrResult &result, bo
 
     // Without any of the optional detectors this is byte-for-byte the
     // original behaviour: no restructuring, runs joined by two spaces.
-    if (!extras.hasCells) {
+    if (!extras.hasCells && !extras.hasCheckboxes) {
         for (const std::vector<size_t> &row: groupIntoRows(result.textBlocks, rowOverlapThresh)) {
             for (size_t i = 0; i < row.size(); ++i) {
                 if (i > 0) out << "  ";
