@@ -529,6 +529,33 @@ std::string resultToReading(const std::string &file, const OcrResult &result, bo
     return out.str();
 }
 
+// With ~25 knobs, making the user discover them one by one is bad usability.
+// A profile sets the base values; any explicit flag then overrides it, so you
+// can start from a preset and adjust a single thing. Applied in a pre-pass for
+// exactly that reason: profile first, individual flags after.
+bool applyCheckboxProfile(const std::string &name, CheckboxParams &p) {
+    if (name == "balanced") {
+        // The validated defaults; nothing to change.
+        return true;
+    }
+    if (name == "strict") {
+        // Maximum precision: for batches where a spurious "[ ]" in a
+        // promissory note is worse than missing a box.
+        p.rescueEnabled = false;
+        p.conf = 0.35f;
+        p.formMin = 5;
+        return true;
+    }
+    if (name == "aggressive") {
+        // Maximum recall, for hard forms that get human review afterwards.
+        p.conf = 0.15f;
+        p.rescueConf = 0.03f;
+        p.rescueMinCluster = 1;
+        return true;
+    }
+    return false;
+}
+
 } // namespace
 
 int main(int argc, char **argv) {
@@ -541,6 +568,21 @@ int main(int argc, char **argv) {
 #endif
 
     Options opt;
+
+    // Pre-pass: the profile only sets base values, so it must be applied
+    // before the individual flags are read, no matter where it appears.
+    for (int i = 1; i < argc; ++i) {
+        if (std::string(argv[i]) != "--checkbox-profile") continue;
+        if (i + 1 >= argc) {
+            fprintf(stderr, "Missing value for --checkbox-profile\n");
+            return 1;
+        }
+        if (!applyCheckboxProfile(argv[i + 1], opt.checkboxParams)) {
+            fprintf(stderr, "--checkbox-profile must be 'strict', 'balanced' or 'aggressive'\n");
+            return 1;
+        }
+    }
+
     for (int i = 1; i < argc; ++i) {
         std::string arg = argv[i];
         auto next = [&](const char *flagName) -> std::string {
@@ -579,6 +621,7 @@ int main(int argc, char **argv) {
         else if (arg == "--cell-rectangularity") opt.cellParams.rectangularity = std::stof(next("--cell-rectangularity"));
         else if (arg == "--detect-checkboxes") opt.detectCheckboxesEnabled = true;
         else if (arg == "--checkbox-model") opt.checkboxModelName = next("--checkbox-model");
+        else if (arg == "--checkbox-profile") next("--checkbox-profile");// already applied in the pre-pass
         else if (arg == "--checkbox-conf") opt.checkboxParams.conf = std::stof(next("--checkbox-conf"));
         else if (arg == "--checkbox-iou") opt.checkboxParams.iou = std::stof(next("--checkbox-iou"));
         else if (arg == "--checkbox-max-saturation")

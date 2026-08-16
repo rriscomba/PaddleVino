@@ -93,6 +93,7 @@ Checkbox detection (see "Checkbox detection" below). Also all off by default:
 | --- | --- | --- |
 | `--detect-checkboxes` | Detect checkboxes and whether they are ticked | off |
 | `--checkbox-model <file>` | Model file name inside `--models-dir` | `checkbox.onnx` |
+| `--checkbox-profile strict\|balanced\|aggressive` | Preset for the knobs below; any explicit flag overrides it | `balanced` |
 | `--checkbox-conf <f>` | Confidence threshold of the main pass | `0.25` |
 | `--checkbox-iou <f>` | NMS IoU, crossing classes | `0.45` |
 | `--checkbox-max-saturation <f>` | Maximum mean HSV saturation; drops colour logos | `20.0` |
@@ -269,6 +270,19 @@ With `--detect-checkboxes`, JSON output gains `document_type` and a
 misclassified, that number says exactly where to put `--checkbox-ink-thresh`.
 `source` distinguishes what the model saw at normal confidence (`main`) from
 what the heuristics recovered (`rescue`).
+
+There are a lot of knobs, so there are also three presets:
+`--checkbox-profile strict` (no rescue, `conf 0.35`, `form-min 5` — maximum
+precision), `balanced` (the defaults above, validated on three real forms),
+and `aggressive` (`conf 0.15`, `rescue-conf 0.03`, `rescue-min-cluster 1` —
+maximum recall, for hard forms that get human review afterwards). The profile
+sets the base values and any explicit flag overrides it, so you can start from
+a preset and change a single thing.
+
+To tune any of this, use `--debug-overlay` to see the boxes and
+`--debug-checkbox-candidates` to see what was thrown away and why
+(`saturation`, `below-conf`, `rescue-pruned`, `nms`) — if a box is missing,
+the JSON tells you whether the model never saw it or a filter dropped it.
 
 Known limits, measured on the reference documents: recall is 100% on two
 forms and 80% on a dense one (boxes that share a border inside a table have
