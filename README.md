@@ -85,6 +85,7 @@ are off by default, so behaviour without them is unchanged:
 | `--cell-min-height <f>` | Minimum cell height as a fraction of the page height | `0.006` |
 | `--cell-max-area <f>` | Maximum cell area as a fraction of the page | `0.6` |
 | `--cell-rectangularity <f>` | Minimum `contourArea / boundingBoxArea` | `0.7` |
+| `--debug-overlay <file>` | Write a copy of the page with the detected boxes drawn on it (cells in blue) | off |
 
 JSON output is an array with one entry per processed image:
 

@@ -49,6 +49,9 @@ struct Options {
     // --- cell structure detection (off by default) ---
     bool detectCellsEnabled = false;
     CellDetectorParams cellParams;
+
+    // --- diagnostics (off by default) ---
+    std::string debugOverlay;
 };
 
 // Per-page results produced by the optional detectors. Empty/disabled by
@@ -198,6 +201,33 @@ std::string resultToText(const std::string &file, const OcrResult &result, bool 
     return out.str();
 }
 
+// --debug-overlay names a single file, but --input can be a whole directory.
+// With more than one image the index is appended to the stem so the pages
+// don't overwrite each other.
+std::string overlayPath(const std::string &base, size_t index, size_t total) {
+    if (total <= 1) return base;
+    fs::path p(base);
+    std::string stem = p.stem().string();
+    std::string ext = p.extension().string();
+    if (ext.empty()) ext = ".png";
+    fs::path parent = p.parent_path();
+    std::string name = stem + "_" + std::to_string(index) + ext;
+    return parent.empty() ? name : (parent / name).string();
+}
+
+// Draws what the optional detectors found on top of the page: cells in blue.
+// Tuning ~25 numeric knobs blind is not viable; this is the tool that makes
+// them adjustable.
+void writeDebugOverlay(const std::string &path, const cv::Mat &pageBgr, const PageExtras &extras) {
+    cv::Mat vis = pageBgr.clone();
+    for (const Cell &c: extras.cells) {
+        cv::rectangle(vis, cv::Rect(c.x, c.y, c.width, c.height), cv::Scalar(255, 0, 0), 2);
+    }
+    if (!cv::imwrite(path, vis)) {
+        fprintf(stderr, "Could not write debug overlay: %s\n", path.c_str());
+    }
+}
+
 // Groups detected text blocks into reading-order rows: blocks whose boxes'
 // vertical spans have an intersection-over-union above rowOverlapThresh are
 // considered part of the same physical line (the detector emits one box
@@ -341,6 +371,7 @@ int main(int argc, char **argv) {
         else if (arg == "--cell-min-height") opt.cellParams.minHeightFrac = std::stof(next("--cell-min-height"));
         else if (arg == "--cell-max-area") opt.cellParams.maxAreaFrac = std::stof(next("--cell-max-area"));
         else if (arg == "--cell-rectangularity") opt.cellParams.rectangularity = std::stof(next("--cell-rectangularity"));
+        else if (arg == "--debug-overlay") opt.debugOverlay = next("--debug-overlay");
         else if (arg == "--version" || arg == "-v") {
             printf("%s\n", VERSION);
             return 0;
@@ -439,7 +470,8 @@ int main(int argc, char **argv) {
         // padding and the maxSideLen resize), so no transform is needed to
         // put OCR boxes and CV boxes in the same space.
         PageExtras extras;
-        if (ok && opt.detectCellsEnabled) {
+        const bool needsPixels = opt.detectCellsEnabled || !opt.debugOverlay.empty();
+        if (ok && needsPixels) {
             cv::Mat pageBgr = cv::imread(imgPath, cv::IMREAD_COLOR);
             if (pageBgr.empty()) {
                 fprintf(stderr, "Could not re-read image for cell/checkbox detection: %s\n", imgPath.c_str());
@@ -449,6 +481,9 @@ int main(int argc, char **argv) {
                 if (opt.detectCellsEnabled) {
                     extras.hasCells = true;
                     extras.cells = detectCells(gray, opt.cellParams);
+                }
+                if (!opt.debugOverlay.empty()) {
+                    writeDebugOverlay(overlayPath(opt.debugOverlay, i, images.size()), pageBgr, extras);
                 }
             }
         }

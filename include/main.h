@@ -63,7 +63,12 @@ static const char *optionalMsg =
     "                         (default: 0.006)\n"
     "  --cell-max-area <f>    Maximum cell area as a fraction of the page; drops\n"
     "                         section frames (default: 0.6)\n"
-    "  --cell-rectangularity <f>  Minimum contourArea/boundingBoxArea (default: 0.7)\n";
+    "  --cell-rectangularity <f>  Minimum contourArea/boundingBoxArea (default: 0.7)\n"
+    "\n"
+    "  Diagnostics:\n"
+    "  --debug-overlay <file> Write a copy of the page with the detected boxes\n"
+    "                         drawn on it (cells in blue). With several input\n"
+    "                         images the page index is appended to the stem\n";
 
 static const char *otherMsg =
     "  --version, -v           Print version and exit\n"
