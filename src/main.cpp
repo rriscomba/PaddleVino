@@ -14,6 +14,7 @@
 #include "OcrUtils.h"
 #include "EngineType.h"
 #include "CellDetector.h"
+#include "CheckboxDetector.h"
 #include <opencv2/imgcodecs.hpp>
 #include <opencv2/imgproc.hpp>
 
@@ -53,8 +54,14 @@ struct Options {
     bool detectCellsEnabled = false;
     CellDetectorParams cellParams;
 
+    // --- checkbox detection (off by default) ---
+    bool detectCheckboxesEnabled = false;
+    std::string checkboxModelName = "checkbox.onnx";
+    CheckboxParams checkboxParams;
+
     // --- diagnostics (off by default) ---
     std::string debugOverlay;
+    bool debugCheckboxCandidates = false;
 };
 
 // Per-page results produced by the optional detectors. Empty/disabled by
@@ -62,6 +69,9 @@ struct Options {
 struct PageExtras {
     bool hasCells = false;
     std::vector<Cell> cells;
+    bool hasCheckboxes = false;
+    CheckboxResult checkboxes;
+    bool debugCandidates = false;
 };
 
 void printHelp(FILE *out, const char *argv0) {
@@ -161,7 +171,12 @@ std::string resultToJson(const std::string &file, const OcrResult &result, bool 
         out << "\"error\":\"" << jsonEscape(error) << "\",\"lines\":[]}";
         return out.str();
     }
-    out << "\"detect_time_ms\":" << result.detectTime << ",\"lines\":[";
+    out << "\"detect_time_ms\":" << result.detectTime << ",";
+    if (extras.hasCheckboxes) {
+        // Result of the §6.4 gate: shows at a glance whether the rescue ran.
+        out << "\"document_type\":\"" << (extras.checkboxes.isForm ? "form" : "text") << "\",";
+    }
+    out << "\"lines\":[";
     for (size_t i = 0; i < result.textBlocks.size(); ++i) {
         const TextBlock &b = result.textBlocks[i];
         if (i > 0) out << ",";
@@ -176,6 +191,32 @@ std::string resultToJson(const std::string &file, const OcrResult &result, bool 
         out << "]}";
     }
     out << "]";
+    if (extras.hasCheckboxes) {
+        out << ",\"checkboxes\":[";
+        for (size_t i = 0; i < extras.checkboxes.checkboxes.size(); ++i) {
+            const Checkbox &c = extras.checkboxes.checkboxes[i];
+            if (i > 0) out << ",";
+            out << "{\"state\":\"" << (c.checked ? "checked" : "unchecked") << "\",\"box\":";
+            writeRectPoints(out, c.x1, c.y1, c.x2, c.y2);
+            out << ",\"ink_ratio\":" << c.inkRatio
+                << ",\"confidence\":" << c.confidence
+                << ",\"source\":\"" << (c.fromRescue ? "rescue" : "main") << "\""
+                << ",\"snapped\":" << (c.snapped ? "true" : "false") << "}";
+        }
+        out << "]";
+        if (extras.debugCandidates) {
+            out << ",\"checkbox_candidates\":[";
+            for (size_t i = 0; i < extras.checkboxes.discarded.size(); ++i) {
+                const CheckboxCandidate &c = extras.checkboxes.discarded[i];
+                if (i > 0) out << ",";
+                out << "{\"state\":\"" << (c.classId == 0 ? "checked" : "unchecked") << "\",\"box\":";
+                writeRectPoints(out, c.x1, c.y1, c.x2, c.y2);
+                out << ",\"confidence\":" << c.confidence
+                    << ",\"reason\":\"" << jsonEscape(c.reason) << "\"}";
+            }
+            out << "]";
+        }
+    }
     if (extras.hasCells) {
         out << ",\"cells\":[";
         for (size_t i = 0; i < extras.cells.size(); ++i) {
@@ -225,6 +266,14 @@ void writeDebugOverlay(const std::string &path, const cv::Mat &pageBgr, const Pa
     cv::Mat vis = pageBgr.clone();
     for (const Cell &c: extras.cells) {
         cv::rectangle(vis, cv::Rect(c.x, c.y, c.width, c.height), cv::Scalar(255, 0, 0), 2);
+    }
+    for (const Checkbox &c: extras.checkboxes.checkboxes) {
+        const cv::Scalar color = c.checked ? cv::Scalar(0, 200, 0) : cv::Scalar(0, 0, 255);
+        cv::rectangle(vis, cv::Rect(c.x1, c.y1, c.x2 - c.x1, c.y2 - c.y1), color, 2);
+        char label[64];
+        snprintf(label, sizeof(label), "%.2f/%.2f", c.inkRatio, c.confidence);
+        cv::putText(vis, label, cv::Point(c.x1, (std::max)(10, c.y1 - 3)), cv::FONT_HERSHEY_SIMPLEX,
+                    0.35, color, 1, cv::LINE_AA);
     }
     if (!cv::imwrite(path, vis)) {
         fprintf(stderr, "Could not write debug overlay: %s\n", path.c_str());
@@ -506,7 +555,41 @@ int main(int argc, char **argv) {
         else if (arg == "--cell-min-height") opt.cellParams.minHeightFrac = std::stof(next("--cell-min-height"));
         else if (arg == "--cell-max-area") opt.cellParams.maxAreaFrac = std::stof(next("--cell-max-area"));
         else if (arg == "--cell-rectangularity") opt.cellParams.rectangularity = std::stof(next("--cell-rectangularity"));
+        else if (arg == "--detect-checkboxes") opt.detectCheckboxesEnabled = true;
+        else if (arg == "--checkbox-model") opt.checkboxModelName = next("--checkbox-model");
+        else if (arg == "--checkbox-conf") opt.checkboxParams.conf = std::stof(next("--checkbox-conf"));
+        else if (arg == "--checkbox-iou") opt.checkboxParams.iou = std::stof(next("--checkbox-iou"));
+        else if (arg == "--checkbox-max-saturation")
+            opt.checkboxParams.maxSaturation = std::stof(next("--checkbox-max-saturation"));
+        else if (arg == "--checkbox-input-size") opt.checkboxParams.inputSize = std::stoi(next("--checkbox-input-size"));
+        else if (arg == "--checkbox-form-min") opt.checkboxParams.formMin = std::stoi(next("--checkbox-form-min"));
+        else if (arg == "--no-checkbox-rescue") opt.checkboxParams.rescueEnabled = false;
+        else if (arg == "--checkbox-rescue-conf") opt.checkboxParams.rescueConf = std::stof(next("--checkbox-rescue-conf"));
+        else if (arg == "--checkbox-rescue-min-cluster")
+            opt.checkboxParams.rescueMinCluster = std::stoi(next("--checkbox-rescue-min-cluster"));
+        else if (arg == "--checkbox-rescue-x-tol")
+            opt.checkboxParams.rescueXTol = std::stof(next("--checkbox-rescue-x-tol"));
+        else if (arg == "--checkbox-rescue-spacing-tol")
+            opt.checkboxParams.rescueSpacingTol = std::stof(next("--checkbox-rescue-spacing-tol"));
+        else if (arg == "--checkbox-dedup-y-frac")
+            opt.checkboxParams.dedupYFrac = std::stof(next("--checkbox-dedup-y-frac"));
+        else if (arg == "--no-checkbox-snap") opt.checkboxParams.snapEnabled = false;
+        else if (arg == "--checkbox-snap-margin") opt.checkboxParams.snapMargin = std::stoi(next("--checkbox-snap-margin"));
+        else if (arg == "--checkbox-snap-min-area")
+            opt.checkboxParams.snapMinArea = std::stof(next("--checkbox-snap-min-area"));
+        else if (arg == "--checkbox-snap-max-area")
+            opt.checkboxParams.snapMaxArea = std::stof(next("--checkbox-snap-max-area"));
+        else if (arg == "--checkbox-snap-min-aspect")
+            opt.checkboxParams.snapMinAspect = std::stof(next("--checkbox-snap-min-aspect"));
+        else if (arg == "--checkbox-snap-max-aspect")
+            opt.checkboxParams.snapMaxAspect = std::stof(next("--checkbox-snap-max-aspect"));
+        else if (arg == "--checkbox-snap-rectangularity")
+            opt.checkboxParams.snapRectangularity = std::stof(next("--checkbox-snap-rectangularity"));
+        else if (arg == "--checkbox-ink-thresh") opt.checkboxParams.inkThresh = std::stof(next("--checkbox-ink-thresh"));
+        else if (arg == "--checkbox-ink-border") opt.checkboxParams.inkBorder = std::stof(next("--checkbox-ink-border"));
+        else if (arg == "--checkbox-ink-dark") opt.checkboxParams.inkDark = std::stoi(next("--checkbox-ink-dark"));
         else if (arg == "--debug-overlay") opt.debugOverlay = next("--debug-overlay");
+        else if (arg == "--debug-checkbox-candidates") opt.debugCheckboxCandidates = true;
         else if (arg == "--version" || arg == "-v") {
             printf("%s\n", VERSION);
             return 0;
@@ -553,6 +636,12 @@ int main(int argc, char **argv) {
         }
     }
 
+    std::string checkboxPath = opt.modelsDir + "/" + opt.checkboxModelName;
+    if (opt.detectCheckboxesEnabled && !isFileExists(checkboxPath)) {
+        fprintf(stderr, "checkbox model not found: %s\n", checkboxPath.c_str());
+        return 1;
+    }
+
     std::vector<std::string> images = collectImages(opt.input, opt.recursive);
     if (images.empty()) {
         fprintf(stderr, "No input images found at: %s\n", opt.input.c_str());
@@ -567,6 +656,18 @@ int main(int argc, char **argv) {
             false);//isOutputResultImg
     ocrLite.setEngine(engine);
     ocrLite.initModels(detPath, clsPath, recPath, keysPath);
+
+    CheckboxNet checkboxNet;
+    if (opt.detectCheckboxesEnabled) {
+        checkboxNet.setNumThread(opt.numThread);
+        checkboxNet.setEngine(engine);
+        try {
+            checkboxNet.initModel(checkboxPath);
+        } catch (const std::exception &e) {
+            fprintf(stderr, "Could not load checkbox model %s: %s\n", checkboxPath.c_str(), e.what());
+            return 1;
+        }
+    }
 
     std::ostream *out = &std::cout;
     std::ofstream outFile;
@@ -605,7 +706,7 @@ int main(int argc, char **argv) {
         // padding and the maxSideLen resize), so no transform is needed to
         // put OCR boxes and CV boxes in the same space.
         PageExtras extras;
-        const bool needsPixels = opt.detectCellsEnabled || !opt.debugOverlay.empty();
+        const bool needsPixels = opt.detectCellsEnabled || opt.detectCheckboxesEnabled || !opt.debugOverlay.empty();
         if (ok && needsPixels) {
             cv::Mat pageBgr = cv::imread(imgPath, cv::IMREAD_COLOR);
             if (pageBgr.empty()) {
@@ -616,6 +717,12 @@ int main(int argc, char **argv) {
                 if (opt.detectCellsEnabled) {
                     extras.hasCells = true;
                     extras.cells = detectCells(gray, opt.cellParams);
+                }
+                if (opt.detectCheckboxesEnabled) {
+                    extras.hasCheckboxes = true;
+                    extras.debugCandidates = opt.debugCheckboxCandidates;
+                    extras.checkboxes = detectCheckboxes(checkboxNet, pageBgr, opt.checkboxParams,
+                                                          opt.debugCheckboxCandidates);
                 }
                 if (!opt.debugOverlay.empty()) {
                     writeDebugOverlay(overlayPath(opt.debugOverlay, i, images.size()), pageBgr, extras);

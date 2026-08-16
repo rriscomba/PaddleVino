@@ -56,8 +56,14 @@ std::vector<CheckboxDetection> CheckboxNet::predict(const cv::Mat &srcBgr, int i
     const int padX = (inputSize - newW) / 2;
     const int padY = (inputSize - newH) / 2;
 
+    // INTER_AREA, not INTER_LINEAR: the prototype resizes with PIL, whose
+    // BILINEAR scales the filter support by the reduction factor (i.e. it
+    // antialiases). A full page is downscaled ~2x to reach 1024, so plain
+    // INTER_LINEAR aliases badly and the network loses boxes -- measured, it
+    // dropped a 0.35-confidence checkbox on pagina2 and shifted every score.
+    // With INTER_AREA the C++ output matches the Python golden files.
     cv::Mat resized;
-    cv::resize(srcBgr, resized, cv::Size(newW, newH), 0, 0, cv::INTER_LINEAR);
+    cv::resize(srcBgr, resized, cv::Size(newW, newH), 0, 0, cv::INTER_AREA);
     cv::Mat canvas(inputSize, inputSize, CV_8UC3, cv::Scalar(114, 114, 114));
     resized.copyTo(canvas(cv::Rect(padX, padY, newW, newH)));
 
