@@ -3,15 +3,21 @@
 # directory, alongside the matching character dictionary.
 #
 # Usage:
-#   powershell -ExecutionPolicy Bypass -File models/download_models.ps1 [-Tier small|tiny|medium]
+#   powershell -ExecutionPolicy Bypass -File models/download_models.ps1 [-Tier small|tiny|medium] [-Checkbox]
 #
 # Source of truth for these URLs:
 #   https://github.com/RapidAI/RapidOCR/blob/main/python/rapidocr/default_models.yaml
 # Models are hosted on ModelScope under the RapidAI/RapidOCR model repo.
+#
+# -Checkbox additionally downloads the optional checkbox detection model used
+# by --detect-checkboxes. It is behind a switch on purpose: ~10.8 MB most
+# users do not need, and it is AGPL-3.0 licensed (see
+# THIRD_PARTY_LICENSES/checkbox-detector-LICENSE-AGPL-3.0.txt).
 
 param(
     [ValidateSet("tiny", "small", "medium")]
     [string]$Tier = "small",
+    [switch]$Checkbox,
     [string]$DestDir = $PSScriptRoot
 )
 
@@ -46,5 +52,11 @@ Get-File $detUrl  (Join-Path $DestDir "det.onnx")
 Get-File $recUrl  (Join-Path $DestDir "rec.onnx")
 Get-File $clsUrl  (Join-Path $DestDir "cls.onnx")
 Get-File $dictUrl (Join-Path $DestDir "ppocrv6_dict.txt")
+
+if ($Checkbox) {
+    $checkboxUrl = "https://huggingface.co/wendys-llc/checkbox-detector/resolve/main/checkbox_yolo12n.onnx"
+    Get-File $checkboxUrl (Join-Path $DestDir "checkbox.onnx")
+    Write-Host "Checkbox model downloaded. It is AGPL-3.0 licensed - see THIRD_PARTY_LICENSES/."
+}
 
 Write-Host "Done. Models placed in $DestDir (tier: $Tier)."

@@ -29,7 +29,11 @@ repository builds on. Changes made here:
 
 ## License
 
-- This repository's own code is MIT-licensed — see [`LICENSE`](LICENSE).
+- This repository's own code is licensed under **AGPL-3.0** — see
+  [`LICENSE`](LICENSE). It was MIT-licensed up to and including the last
+  release published under that license; anything already published under MIT
+  stays MIT permanently, the change applies going forward only. The move was
+  required by the checkbox detection model below.
 - The OCR engine (`src/`, `include/`) is adapted from
   [RapidAI/RapidOcrOnnx](https://github.com/RapidAI/RapidOcrOnnx), which is
   Apache-2.0. That license is preserved at
@@ -39,6 +43,13 @@ repository builds on. Changes made here:
   (Baidu/PaddlePaddle), free to use for inference; redistributed here in
   ONNX form via the RapidAI/RapidOCR project's model mirror on ModelScope.
   Review PaddleOCR's model license before commercial redistribution.
+- Checkbox detection model (optional, only used with `--detect-checkboxes`):
+  YOLO12n from [wendys-llc/checkbox-detector](https://huggingface.co/wendys-llc/checkbox-detector),
+  exported by Ultralytics and declaring **AGPL-3.0** in its metadata. Its
+  license text is at
+  [`THIRD_PARTY_LICENSES/checkbox-detector-LICENSE-AGPL-3.0.txt`](THIRD_PARTY_LICENSES/checkbox-detector-LICENSE-AGPL-3.0.txt).
+  It is not downloaded by default — pass `-Checkbox` / `checkbox` to
+  `models/download_models.ps1` / `.sh` if you want it.
 
 ## CLI usage
 
