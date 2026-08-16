@@ -85,6 +85,7 @@ are off by default, so behaviour without them is unchanged:
 | `--cell-min-height <f>` | Minimum cell height as a fraction of the page height | `0.006` |
 | `--cell-max-area <f>` | Maximum cell area as a fraction of the page | `0.6` |
 | `--cell-rectangularity <f>` | Minimum `contourArea / boundingBoxArea` | `0.7` |
+| `--reading-column-gap <f>` | Horizontal gap (in line heights) above which `--format reading` separates two runs with `\|`; only applies with `--detect-cells` | `0.8` |
 | `--debug-overlay <file>` | Write a copy of the page with the detected boxes drawn on it (cells in blue) | off |
 
 JSON output is an array with one entry per processed image:
@@ -157,6 +158,19 @@ With `--detect-cells`, JSON output gains a `cells` key alongside `lines`:
   ]
 }
 ```
+
+`--detect-cells` also changes how `--format reading` assembles the page: text
+runs whose centre falls inside the same cell are collapsed into a single
+element (joined by spaces, top-to-bottom then left-to-right, positioned at
+the cell), so a two-line address field stops dragging its whole row out of
+alignment, and a label and its value stop landing on different lines. Cells
+are structural units, so they are separated from their neighbours with ` | `;
+between two loose text runs the separator depends on the horizontal gap,
+controlled by `--reading-column-gap` (in line heights, default `0.8`).
+
+With cell grouping active, a lower `--reading-row-overlap` works better —
+around `0.25` in the prototype. The global default stays at `0.5` so plain
+`--format reading` is unchanged.
 
 Cell detection assumes **natively digital** documents (a PDF or spreadsheet
 rendered to an image: straight borders, no skew, no scanner noise). A

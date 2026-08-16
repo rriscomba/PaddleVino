@@ -45,6 +45,9 @@ struct Options {
     bool doAngle = true;
     bool mostAngle = true;
     float readingRowOverlap = 0.5f;
+    // Only used once --detect-cells / --detect-checkboxes restructure the
+    // reading output; plain --format reading keeps its two-space join.
+    float readingColumnGap = 0.8f;
 
     // --- cell structure detection (off by default) ---
     bool detectCellsEnabled = false;
@@ -302,8 +305,128 @@ std::vector<std::vector<size_t>> groupIntoRows(const std::vector<TextBlock> &blo
     return rows;
 }
 
+struct Bounds {
+    int x1, y1, x2, y2;
+};
+
+Bounds boundsOf(const std::vector<cv::Point> &pts) {
+    Bounds b{pts.front().x, pts.front().y, pts.front().x, pts.front().y};
+    for (const cv::Point &p: pts) {
+        b.x1 = (std::min)(b.x1, p.x);
+        b.y1 = (std::min)(b.y1, p.y);
+        b.x2 = (std::max)(b.x2, p.x);
+        b.y2 = (std::max)(b.y2, p.y);
+    }
+    return b;
+}
+
+std::vector<cv::Point> rectPoints(int x1, int y1, int x2, int y2) {
+    return {cv::Point(x1, y1), cv::Point(x2, y1), cv::Point(x2, y2), cv::Point(x1, y2)};
+}
+
+// Builds the elements that go into groupIntoRows() when the optional
+// detectors are active. Two transformations, both from the Python prototype
+// (merge_celdas.py):
+//
+//  1. text runs whose centre falls inside the same cell are collapsed into a
+//     single synthetic block (joined by spaces, top-to-bottom then
+//     left-to-right, box = the cell), so a two-line address field stops
+//     dragging its whole row out of alignment;
+//  2. a cell that CONTAINS checkboxes is not a field with one value but a
+//     frame grouping several options (the annexes list at the foot of a
+//     form). Collapsing it wrecks that section, so its runs are left loose.
+//
+// The result is fed to groupIntoRows() unmodified.
+std::vector<TextBlock> buildReadingBlocks(const std::vector<TextBlock> &blocks, const PageExtras &extras,
+                                          std::vector<bool> &isCellOut) {
+    std::vector<TextBlock> outBlocks;
+    isCellOut.clear();
+
+    // Cells that hold a checkbox must not collapse.
+    std::vector<bool> isContainer(extras.cells.size(), false);
+
+    std::vector<std::vector<size_t>> perCell(extras.cells.size());
+    for (size_t i = 0; i < blocks.size(); ++i) {
+        Bounds b = boundsOf(blocks[i].boxPoint);
+        const double cx = (b.x1 + b.x2) / 2.0, cy = (b.y1 + b.y2) / 2.0;
+        long long bestArea = 0;
+        int best = -1;
+        for (size_t c = 0; c < extras.cells.size(); ++c) {
+            if (isContainer[c]) continue;
+            const Cell &cell = extras.cells[c];
+            if (cx < cell.x || cx > cell.x + cell.width || cy < cell.y || cy > cell.y + cell.height) continue;
+            const long long area = (long long) cell.width * cell.height;
+            if (best < 0 || area < bestArea) {
+                best = (int) c;
+                bestArea = area;
+            }
+        }
+        if (best < 0) {
+            outBlocks.push_back(blocks[i]);
+            isCellOut.push_back(false);
+        } else {
+            perCell[best].push_back(i);
+        }
+    }
+
+    for (size_t c = 0; c < perCell.size(); ++c) {
+        if (perCell[c].empty()) continue;
+        std::vector<size_t> items = perCell[c];
+        std::sort(items.begin(), items.end(), [&](size_t a, size_t b) {
+            Bounds ba = boundsOf(blocks[a].boxPoint), bb = boundsOf(blocks[b].boxPoint);
+            const double ca = (ba.y1 + ba.y2) / 2.0, cb = (bb.y1 + bb.y2) / 2.0;
+            if (ca != cb) return ca < cb;
+            return ba.x1 < bb.x1;
+        });
+        std::string text;
+        for (size_t idx: items) {
+            if (blocks[idx].text.empty()) continue;
+            if (!text.empty()) text += " ";
+            text += blocks[idx].text;
+        }
+        if (text.empty()) continue;
+        const Cell &cell = extras.cells[c];
+        TextBlock tb{};
+        tb.boxPoint = rectPoints(cell.x, cell.y, cell.x + cell.width, cell.y + cell.height);
+        tb.text = text;
+        outBlocks.push_back(tb);
+        isCellOut.push_back(true);
+    }
+
+    return outBlocks;
+}
+
+// Renders one row. A cell is a structural unit (label vs. field) and is always
+// separated with " | "; between two loose text runs the horizontal gap decides,
+// measured in line heights, because a wide gap in running text can just be
+// paragraph spacing.
+std::string renderReadingRow(const std::vector<TextBlock> &blocks, const std::vector<bool> &isCell,
+                             const std::vector<size_t> &row, float columnGapRatio) {
+    std::vector<double> heights;
+    for (size_t idx: row) {
+        Bounds b = boundsOf(blocks[idx].boxPoint);
+        heights.push_back((std::max)(1.0, (double) (b.y2 - b.y1)));
+    }
+    std::sort(heights.begin(), heights.end());
+    const double refH = heights[heights.size() / 2];
+
+    std::string outText = blocks[row.front()].text;
+    for (size_t i = 1; i < row.size(); ++i) {
+        const size_t prev = row[i - 1], cur = row[i];
+        std::string sep;
+        if (isCell[prev] || isCell[cur]) {
+            sep = " | ";
+        } else {
+            const double gap = (double) boundsOf(blocks[cur].boxPoint).x1 - boundsOf(blocks[prev].boxPoint).x2;
+            sep = gap > columnGapRatio * refH ? " | " : " ";
+        }
+        outText += sep + blocks[cur].text;
+    }
+    return outText;
+}
+
 std::string resultToReading(const std::string &file, const OcrResult &result, bool ok, const std::string &error,
-                            float rowOverlapThresh) {
+                            float rowOverlapThresh, const PageExtras &extras, float columnGapRatio) {
     std::ostringstream out;
     if (!ok) {
         out << "confidence=0.00% (error)\n" << "ERROR (" << file << "): " << error << "\n";
@@ -314,12 +437,23 @@ std::string resultToReading(const std::string &file, const OcrResult &result, bo
     float avgConfidence = result.textBlocks.empty() ? 0.0f : sum / (float) result.textBlocks.size();
     out << "confidence=" << (avgConfidence * 100.0f) << "%\n";
 
-    for (const std::vector<size_t> &row: groupIntoRows(result.textBlocks, rowOverlapThresh)) {
-        for (size_t i = 0; i < row.size(); ++i) {
-            if (i > 0) out << "  ";
-            out << result.textBlocks[row[i]].text;
+    // Without any of the optional detectors this is byte-for-byte the
+    // original behaviour: no restructuring, runs joined by two spaces.
+    if (!extras.hasCells) {
+        for (const std::vector<size_t> &row: groupIntoRows(result.textBlocks, rowOverlapThresh)) {
+            for (size_t i = 0; i < row.size(); ++i) {
+                if (i > 0) out << "  ";
+                out << result.textBlocks[row[i]].text;
+            }
+            out << "\n";
         }
-        out << "\n";
+        return out.str();
+    }
+
+    std::vector<bool> isCell;
+    std::vector<TextBlock> blocks = buildReadingBlocks(result.textBlocks, extras, isCell);
+    for (const std::vector<size_t> &row: groupIntoRows(blocks, rowOverlapThresh)) {
+        out << renderReadingRow(blocks, isCell, row, columnGapRatio) << "\n";
     }
     return out.str();
 }
@@ -364,6 +498,7 @@ int main(int argc, char **argv) {
         else if (arg == "--no-angle") opt.doAngle = false;
         else if (arg == "--no-most-angle") opt.mostAngle = false;
         else if (arg == "--reading-row-overlap") opt.readingRowOverlap = std::stof(next("--reading-row-overlap"));
+        else if (arg == "--reading-column-gap") opt.readingColumnGap = std::stof(next("--reading-column-gap"));
         else if (arg == "--detect-cells") opt.detectCellsEnabled = true;
         else if (arg == "--cell-h-frac") opt.cellParams.hFrac = std::stoi(next("--cell-h-frac"));
         else if (arg == "--cell-v-frac") opt.cellParams.vFrac = std::stoi(next("--cell-v-frac"));
@@ -492,7 +627,8 @@ int main(int argc, char **argv) {
             if (i > 0) *out << ",";
             *out << resultToJson(imgPath, result, ok, error, extras);
         } else if (opt.format == "reading") {
-            *out << resultToReading(imgPath, result, ok, error, opt.readingRowOverlap);
+            *out << resultToReading(imgPath, result, ok, error, opt.readingRowOverlap, extras,
+                                    opt.readingColumnGap);
         } else {
             *out << resultToText(imgPath, result, ok, error);
         }
