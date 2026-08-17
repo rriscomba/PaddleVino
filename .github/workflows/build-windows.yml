@@ -10,11 +10,6 @@ on:
         description: "PP-OCRv6 model tier to bundle (tiny/small/medium)"
         required: false
         default: "small"
-      bundle_checkbox_model:
-        description: "Also bundle the checkbox detection model (+10.8 MB, AGPL-3.0)"
-        required: false
-        type: boolean
-        default: false
 
 permissions:
   contents: write
@@ -31,9 +26,6 @@ env:
   ORT_OPENVINO_PACKAGE: "intel.ml.onnxruntime.openvino"
   ORT_OPENVINO_VERSION: "1.24.1"
   MODEL_TIER: ${{ github.event.inputs.model_tier || 'small' }}
-  # Opt-in: the checkbox model is AGPL-3.0 and ~10.8 MB, and --detect-checkboxes
-  # is off by default, so plain pushes ship without it.
-  BUNDLE_CHECKBOX: ${{ github.event.inputs.bundle_checkbox_model || 'false' }}
 
 jobs:
   build:
@@ -88,14 +80,10 @@ jobs:
           Write-Host "Headers:"; Get-ChildItem third_party/onnxruntime/include | Select-Object Name
           Write-Host "Native libs:"; Get-ChildItem third_party/onnxruntime/lib | Select-Object Name
 
-      - name: Download PP-OCRv6 models
+      - name: Download models
         shell: pwsh
         run: |
-          if ($env:BUNDLE_CHECKBOX -eq "true") {
-            powershell -ExecutionPolicy Bypass -File models/download_models.ps1 -Tier $env:MODEL_TIER -Checkbox
-          } else {
-            powershell -ExecutionPolicy Bypass -File models/download_models.ps1 -Tier $env:MODEL_TIER
-          }
+          powershell -ExecutionPolicy Bypass -File models/download_models.ps1 -Tier $env:MODEL_TIER -Checkbox
 
       - name: Configure (CMake)
         shell: pwsh
@@ -123,12 +111,11 @@ jobs:
           New-Item -ItemType Directory -Force -Path "$pkg/models" | Out-Null
           Copy-Item models/det.onnx, models/rec.onnx, models/cls.onnx "$pkg/models/" -ErrorAction SilentlyContinue
           Copy-Item models/ppocrv6_dict.txt "$pkg/models/" -ErrorAction SilentlyContinue
-          # Staged only when the workflow was dispatched with
-          # bundle_checkbox_model, so the default zip stays free of the
-          # AGPL-3.0 model and its 10.8 MB.
-          if ($env:BUNDLE_CHECKBOX -eq "true") {
-            Copy-Item models/checkbox.onnx "$pkg/models/"
-          }
+          # Always staged. This one is NOT -ErrorAction SilentlyContinue on
+          # purpose: shipping a zip whose --detect-checkboxes cannot run is
+          # the exact failure this bundling is meant to prevent, so a missing
+          # model must fail the build instead of producing a broken package.
+          Copy-Item models/checkbox.onnx "$pkg/models/"
           Copy-Item README.md $pkg/ -ErrorAction SilentlyContinue
           Copy-Item CHANGELOG.md $pkg/ -ErrorAction SilentlyContinue
           Copy-Item LICENSE $pkg/ -ErrorAction SilentlyContinue

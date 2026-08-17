@@ -60,9 +60,12 @@
 - All of the above default to off. With no new flag passed, `json`, `txt` and
   `reading` output is byte-for-byte what 0.1.0 produced (verified by diffing
   both binaries on the same images).
-- `models/download_models.ps1` / `.sh` gained an opt-in `-Checkbox` /
-  `checkbox` switch for the checkbox model, and the Windows CI workflow a
-  `bundle_checkbox_model` dispatch input that stages it into the release zip.
+- `models/download_models.ps1` / `.sh` gained a `-Checkbox` / `checkbox`
+  switch for the checkbox model, and the release zip now always bundles it,
+  so `--detect-checkboxes` works straight out of the downloaded package.
+  It was briefly behind an opt-in CI dispatch input, which could never be
+  set on the tag pushes that publish a release — the feature shipped but
+  the model it needs could not.
 - Known limits: these detectors assume natively digital documents (straight
   borders, no skew, no scanner noise); there is no deskew step. Recall on the
   reference forms is 100% / 100% / 80%, with 3 achromatic false positives on

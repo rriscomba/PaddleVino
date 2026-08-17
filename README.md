@@ -48,8 +48,11 @@ repository builds on. Changes made here:
   exported by Ultralytics and declaring **AGPL-3.0** in its metadata. Its
   license text is at
   [`THIRD_PARTY_LICENSES/checkbox-detector-LICENSE-AGPL-3.0.txt`](THIRD_PARTY_LICENSES/checkbox-detector-LICENSE-AGPL-3.0.txt).
-  It is not downloaded by default — pass `-Checkbox` / `checkbox` to
-  `models/download_models.ps1` / `.sh` if you want it.
+  It is bundled in the release zip, so the whole repository — code and
+  shipped package alike — is AGPL-3.0. Building from source fetches it
+  along with the rest via `models/download_models.ps1` / `.sh`; pass
+  `-Checkbox` / `checkbox` explicitly if you are calling those scripts
+  yourself and want it.
 
 ## CLI usage
 
@@ -239,8 +242,9 @@ around `0.25` in the prototype. The global default stays at `0.5` so plain
 ## Checkbox detection
 
 `--detect-checkboxes` needs a YOLO checkbox model (`checkbox.onnx` in
-`--models-dir` by default; download it with
-`models/download_models.ps1 -Checkbox`). The work is split between two very
+`--models-dir` by default). The release zip ships it, so nothing extra is
+needed there; building from source fetches it with the other models via
+`models/download_models.ps1`. The work is split between two very
 different mechanisms, because each is good at exactly what the other is bad
 at:
 
