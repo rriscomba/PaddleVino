@@ -1,5 +1,7 @@
 # PaddleVino
 
+![Build](https://github.com/rriscomba/PaddleVino/actions/workflows/build-windows.yml/badge.svg)
+
 A native Windows CLI OCR tool — no Python runtime required. It runs
 PP-OCRv6 detection/classification/recognition models through ONNX Runtime,
 with a switchable execution backend: plain CPU, or the OpenVINO execution
@@ -8,6 +10,29 @@ provider for Intel CPU/iGPU acceleration.
 It builds automatically in the cloud on every push via GitHub Actions
 (`windows-latest`), producing a downloadable, self-contained `.exe` — no
 Windows machine is required to build it yourself.
+
+## Capabilities at a glance
+
+| Area | What it does | Highlights |
+| --- | --- | --- |
+| Text detection & recognition | PP-OCRv6 detection/classification/recognition via ONNX Runtime | `tiny`/`small`/`medium` model tiers, JSON/txt/reading-order output |
+| Execution backend | Plain CPU or Intel OpenVINO execution provider | `--engine openvino`, safe automatic fallback to CPU |
+| Cell structure detection | Finds field boxes and table cells from ruling lines | Pure morphology — no model, no extra download |
+| Checkbox detection | Locates checkboxes and reports ticked/empty | YOLO12n model + ink-density measurement, tunable presets |
+| Orphan bracket cleanup | Strips stray `()[]{}` left by misread cell borders | Page-aware safeguards against deleting real text |
+| Packaging | Self-contained Windows release, built entirely in CI | No local Windows machine needed |
+
+## Quick start
+
+```
+paddlevino.exe --input input.png --engine openvino --output output.json
+paddlevino.exe --input images\ --recursive --format json
+paddlevino.exe --input document.jpg --format txt
+paddlevino.exe --input page.png --format reading
+```
+
+Fetch the models once (see "PP-OCRv6 models" below), then run the binary
+against a file or a directory of images.
 
 ## Origin
 
@@ -27,41 +52,7 @@ repository builds on. Changes made here:
 - Added a GitHub Actions workflow that builds a Windows release entirely in
   the cloud, bundling official PP-OCRv6 weights into the shipped package.
 
-## License
-
-- This repository's own code is licensed under **AGPL-3.0** — see
-  [`LICENSE`](LICENSE). It was MIT-licensed up to and including the last
-  release published under that license; anything already published under MIT
-  stays MIT permanently, the change applies going forward only. The move was
-  required by the checkbox detection model below.
-- The OCR engine (`src/`, `include/`) is adapted from
-  [RapidAI/RapidOcrOnnx](https://github.com/RapidAI/RapidOcrOnnx), which is
-  Apache-2.0. That license is preserved at
-  [`THIRD_PARTY_LICENSES/RapidOcrOnnx-LICENSE-Apache-2.0.txt`](THIRD_PARTY_LICENSES/RapidOcrOnnx-LICENSE-Apache-2.0.txt)
-  and continues to apply to the derived engine source files.
-- Model weights: PP-OCRv6 models are published by the PaddleOCR project
-  (Baidu/PaddlePaddle), free to use for inference; redistributed here in
-  ONNX form via the RapidAI/RapidOCR project's model mirror on ModelScope.
-  Review PaddleOCR's model license before commercial redistribution.
-- Checkbox detection model (optional, only used with `--detect-checkboxes`):
-  YOLO12n from [wendys-llc/checkbox-detector](https://huggingface.co/wendys-llc/checkbox-detector),
-  exported by Ultralytics and declaring **AGPL-3.0** in its metadata. Its
-  license text is at
-  [`THIRD_PARTY_LICENSES/checkbox-detector-LICENSE-AGPL-3.0.txt`](THIRD_PARTY_LICENSES/checkbox-detector-LICENSE-AGPL-3.0.txt).
-  It is bundled in the release zip, so the whole repository — code and
-  shipped package alike — is AGPL-3.0. Building from source fetches it
-  along with the rest via `models/download_models.ps1` / `.sh`; pass
-  `-Checkbox` / `checkbox` explicitly if you are calling those scripts
-  yourself and want it.
-
-## CLI usage
-
-```
-paddlevino.exe --input imagen.png --engine openvino --output resultado.json
-paddlevino.exe --input carpeta\ --recursive --format json
-paddlevino.exe --input photo.jpg --format txt
-paddlevino.exe --input scan.png --format reading
-```
+## CLI reference
 
 | Flag | Description | Default |
 | --- | --- | --- |
@@ -145,16 +136,18 @@ Diagnostics:
 | `--debug-overlay <file>` | Write a copy of the page with the detected boxes drawn on it: checkboxes green (ticked) / red (empty) with their ink ratio and confidence, cells in blue | off |
 | `--debug-checkbox-candidates` | Also emit the discarded candidates in the JSON, with the reason each was dropped | off |
 
-JSON output is an array with one entry per processed image:
+## Output formats
+
+JSON output (the default) is an array with one entry per processed image:
 
 ```json
 [
   {
-    "file": "imagen.png",
+    "file": "input.png",
     "detect_time_ms": 123.4,
     "lines": [
       {
-        "text": "Hola mundo",
+        "text": "Hello world",
         "confidence": 0.97,
         "box_score": 0.91,
         "box": [[10,10],[120,10],[120,40],[10,40]]
@@ -167,7 +160,7 @@ JSON output is an array with one entry per processed image:
 `--format txt` prints one line per detected text run, each tagged with its
 own confidence — a text run is whatever the detector boxed as a single
 region, which for a printed line containing a label and a value (e.g. a
-form's "Nombre" and the name next to it) is usually *two* runs, so they show
+form's "Name" and the value next to it) is usually *two* runs, so they show
 up as two separate lines even though they sit on the same row of the
 document.
 
@@ -226,7 +219,7 @@ between two loose text runs the separator depends on the horizontal gap,
 controlled by `--reading-column-gap` (in line heights, default `0.8`).
 
 One exception: a cell that *contains* checkboxes is not a field with a value
-but a frame grouping several options (a form's list of annexes), so its runs
+but a frame grouping several options (a form's list of choices), so its runs
 are deliberately left loose. Without that rule, the whole list fuses into one
 line.
 
@@ -279,7 +272,7 @@ With `--detect-checkboxes`, JSON output gains `document_type` and a
 
 ```json
 {
-  "file": "anexo.jpg",
+  "file": "form.jpg",
   "detect_time_ms": 123.4,
   "document_type": "form",
   "lines": [ ... ],
@@ -328,9 +321,9 @@ revisited in a future release.
 
 `--clean-orphan-brackets` fixes a recurring OCR artifact on scanned forms: a
 cell's border gets misread as a stray `[` or `]` character glued onto a real
-word (e.g. `Nombre[`). Masking the cell border out of the crop was tried and
+word (e.g. `Name[`). Masking the cell border out of the crop was tried and
 discarded — on dense documents the border sits close enough to the text that
-it clips real characters (`INMOBILIARIA` → `INMUBILIAKIA`). This fix is
+it clips real characters (`COMPANY` → `COMPANV`). This fix is
 purely textual instead: in ordinary office text, `()[]{}` should always come
 balanced, so a bracket left over without its pair on the same line is treated
 as noise and dropped. Matching is per line, via a simple stack: push on an
@@ -346,22 +339,22 @@ Taken alone that rule is too eager, and the reference forms show exactly how.
 Two safeguards sit on top of it, both added because a real document broke the
 naive version:
 
-**A pair may legitimately span two lines.** `pagina2.png` contains
-`Tipo de Movilidad (marca una de las` / `siguientes opciones)` — two halves of
-one parenthesis, each looking orphan on its own line, and the naive rule
-deleted both. So the decision is made per bracket kind over the whole page: if
-a kind has *both* an unmatched open and an unmatched close somewhere on the
-page, none of that kind is removed. The genuine artifact has the opposite
-signature — a border misread as `[` leaves opens with no closing partner
-anywhere — which is precisely what survives the veto. Counts are compared
-rather than positions, so the result does not depend on the order the detector
-emitted the runs in.
+**A pair may legitimately span two lines.** `sample-form-1.png` contains
+`Preferred Contact Method (select one of the` / `following options)` — two
+halves of one parenthesis, each looking orphan on its own line, and the naive
+rule deleted both. So the decision is made per bracket kind over the whole
+page: if a kind has *both* an unmatched open and an unmatched close somewhere
+on the page, none of that kind is removed. The genuine artifact has the
+opposite signature — a border misread as `[` leaves opens with no closing
+partner anywhere — which is precisely what survives the veto. Counts are
+compared rather than positions, so the result does not depend on the order
+the detector emitted the runs in.
 
 **The artifact sits at the edge of a run.** It is a cell border that fell
 inside the detected box, so it lands at the very start or end of the text
-(`DNI[`, `]Casa`) — measured, every real one does. An unmatched bracket in the
-middle is far more likely real text whose partner the OCR simply dropped:
-`ANEXOSFMV0001.jpg` yields `... Cuota Inicial (S/` where the `)` was lost, and
+(`ID[`, `]Address`) — measured, every real one does. An unmatched bracket in
+the middle is far more likely real text whose partner the OCR simply dropped:
+`sample-form-3.jpg` yields `... Amount Due ($` where the `)` was lost, and
 removing that `(` corrupted good text. Interior orphans are therefore left
 alone unless you pass `--clean-brackets-anywhere`.
 
@@ -383,9 +376,9 @@ Measured on the reference documents, with no false positives left:
 
 | Document | Artifacts removed | Legitimate brackets kept |
 | --- | --- | --- |
-| `pagina2.png` | 6 | `Soles (S/.)`, `(marca una de las` … `siguientes opciones)` |
-| `preview.png` | 6 | `(Jun-2026)` |
-| `ANEXOSFMV0001.jpg` | 3 | `(S/)` ×2, `(meses)` ×2, `Cuota Inicial (S/` |
+| `sample-form-1.png` | 6 | `Amount ($)`, `(select one of the` … `following options)` |
+| `sample-form-2.png` | 6 | `(Draft)` |
+| `sample-form-3.jpg` | 3 | `($)` ×2, `(months)` ×2, `Amount Due ($` |
 
 ```json
 {
@@ -535,6 +528,33 @@ It runs on push to `main`, on `v*` tags, and via manual dispatch; builds on
 `windows-latest`; downloads PP-OCRv6 models; and uploads
 `paddlevino-windows-x64.zip` as a build artifact on every run. When
 triggered by a `v*` tag, it also attaches that zip to a GitHub Release.
+
+## License
+
+- This repository's own code is licensed under **AGPL-3.0** — see
+  [`LICENSE`](LICENSE). It was MIT-licensed up to and including the last
+  release published under that license; anything already published under MIT
+  stays MIT permanently, the change applies going forward only. The move was
+  required by the checkbox detection model below.
+- The OCR engine (`src/`, `include/`) is adapted from
+  [RapidAI/RapidOcrOnnx](https://github.com/RapidAI/RapidOcrOnnx), which is
+  Apache-2.0. That license is preserved at
+  [`THIRD_PARTY_LICENSES/RapidOcrOnnx-LICENSE-Apache-2.0.txt`](THIRD_PARTY_LICENSES/RapidOcrOnnx-LICENSE-Apache-2.0.txt)
+  and continues to apply to the derived engine source files.
+- Model weights: PP-OCRv6 models are published by the PaddleOCR project
+  (Baidu/PaddlePaddle), free to use for inference; redistributed here in
+  ONNX form via the RapidAI/RapidOCR project's model mirror on ModelScope.
+  Review PaddleOCR's model license before commercial redistribution.
+- Checkbox detection model (optional, only used with `--detect-checkboxes`):
+  YOLO12n from [wendys-llc/checkbox-detector](https://huggingface.co/wendys-llc/checkbox-detector),
+  exported by Ultralytics and declaring **AGPL-3.0** in its metadata. Its
+  license text is at
+  [`THIRD_PARTY_LICENSES/checkbox-detector-LICENSE-AGPL-3.0.txt`](THIRD_PARTY_LICENSES/checkbox-detector-LICENSE-AGPL-3.0.txt).
+  It is bundled in the release zip, so the whole repository — code and
+  shipped package alike — is AGPL-3.0. Building from source fetches it
+  along with the rest via `models/download_models.ps1` / `.sh`; pass
+  `-Checkbox` / `checkbox` explicitly if you are calling those scripts
+  yourself and want it.
 
 ## Status of verification
 

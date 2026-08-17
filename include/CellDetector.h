@@ -17,7 +17,7 @@
 // The vertical one must be SHORT (height/80 ~ 16 px) because the field boxes
 // of these forms are only ~20 px tall; with a long vertical kernel their sides
 // do not survive the opening, the cell never closes, and 10 of 18 fields are
-// lost (measured: h/28 -> 8 cells on pagina2, h/80 -> 18).
+// lost (measured: h/28 -> 8 cells on a sample form, h/80 -> 18).
 struct CellDetectorParams {
     int hFrac = 28;                 // horizontal kernel divisor (width / N)
     int vFrac = 80;                 // vertical kernel divisor (height / N)

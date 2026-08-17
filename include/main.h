@@ -9,8 +9,8 @@ static const char *usageMsg =
 
 static const char *examplesMsg =
     "Examples:\n"
-    "  paddlevino.exe --input imagen.png --engine openvino --output resultado.json\n"
-    "  paddlevino.exe --input carpeta\\ --recursive --format json\n"
+    "  paddlevino.exe --input input.png --engine openvino --output output.json\n"
+    "  paddlevino.exe --input images\\ --recursive --format json\n"
     "  paddlevino --input photo.jpg --format txt\n";
 
 static const char *requiredMsg =
@@ -127,7 +127,7 @@ static const char *optionalMsg =
     "  Orphan bracket cleanup (off by default):\n"
     "  --clean-orphan-brackets [ratio]  Strip unmatched ()[]{} from OCR text\n"
     "                         per line (e.g. a cell border misread as \"[\" in\n"
-    "                         \"Nombre[\"). Runs before any synthetic checkbox\n"
+    "                         \"Name[\"). Runs before any synthetic checkbox\n"
     "                         text exists, so \"[x]\"/\"[ ]\" are never touched.\n"
     "                         A pair spanning two lines is kept: if a bracket\n"
     "                         kind has both an unmatched open and an unmatched\n"
