@@ -127,6 +127,14 @@ Checkbox detection (see "Checkbox detection" below). Also all off by default:
 | `--checkbox-ink-border <f>` | Fraction of the side cropped inwards to exclude the border | `0.25` |
 | `--checkbox-ink-dark <int>` | Grey level below which a pixel counts as ink | `128` |
 
+Orphan bracket cleanup (see "Orphan bracket cleanup" below). Also off by default:
+
+| Flag | Description | Default |
+| --- | --- | --- |
+| `--clean-orphan-brackets [ratio]` | Strip unmatched `()[]{}` from OCR text per line. `[ratio]` is the per-page code gate in the same flag: skip the cleanup entirely if the fraction of lines still holding an unmatched bracket exceeds it | off (`0.30` if passed with no value) |
+| `--clean-brackets-gate-min-lines <int>` | Minimum lines on the page for the gate above to apply; shorter pages are always cleaned | `5` |
+| `--clean-brackets-anywhere` | Also strip unmatched brackets in the middle of a run, not just at its start/end | edges only |
+
 Diagnostics:
 
 | Flag | Description | Default |
@@ -309,6 +317,78 @@ pipeline today.
 PDF input is out of scope for this tool (the base engine has no PDF
 support); rasterize pages to images first if you need that. This may be
 revisited in a future release.
+
+## Orphan bracket cleanup
+
+`--clean-orphan-brackets` fixes a recurring OCR artifact on scanned forms: a
+cell's border gets misread as a stray `[` or `]` character glued onto a real
+word (e.g. `Nombre[`). Masking the cell border out of the crop was tried and
+discarded — on dense documents the border sits close enough to the text that
+it clips real characters (`INMOBILIARIA` → `INMUBILIAKIA`). This fix is
+purely textual instead: in ordinary office text, `()[]{}` should always come
+balanced, so a bracket left over without its pair on the same line is treated
+as noise and dropped. Matching is per line, via a simple stack: push on an
+opening bracket, pop on a matching close; whatever is left unpaired at the
+end of the line — either stack leftovers or an unmatched close — gets
+removed.
+
+Because checkboxes are only injected into `--format reading` as synthetic
+`[x]` / `[ ]` elements after this cleanup runs (it acts on the raw OCR text),
+those tokens are never at risk and need no special-casing.
+
+Taken alone that rule is too eager, and the reference forms show exactly how.
+Two safeguards sit on top of it, both added because a real document broke the
+naive version:
+
+**A pair may legitimately span two lines.** `pagina2.png` contains
+`Tipo de Movilidad (marca una de las` / `siguientes opciones)` — two halves of
+one parenthesis, each looking orphan on its own line, and the naive rule
+deleted both. So the decision is made per bracket kind over the whole page: if
+a kind has *both* an unmatched open and an unmatched close somewhere on the
+page, none of that kind is removed. The genuine artifact has the opposite
+signature — a border misread as `[` leaves opens with no closing partner
+anywhere — which is precisely what survives the veto. Counts are compared
+rather than positions, so the result does not depend on the order the detector
+emitted the runs in.
+
+**The artifact sits at the edge of a run.** It is a cell border that fell
+inside the detected box, so it lands at the very start or end of the text
+(`DNI[`, `]Casa`) — measured, every real one does. An unmatched bracket in the
+middle is far more likely real text whose partner the OCR simply dropped:
+`ANEXOSFMV0001.jpg` yields `... Cuota Inicial (S/` where the `)` was lost, and
+removing that `(` corrupted good text. Interior orphans are therefore left
+alone unless you pass `--clean-brackets-anywhere`.
+
+Finally, a page of scanned source code breaks the "always balanced"
+assumption on purpose — a `{` alone at the end of a line, a `}` alone on the
+next, are both completely normal there. The per-kind veto already spares a
+well-formed code page (its unmatched `{` and `}` pair off across the page), and
+a frequency gate catches the rest: if the fraction of lines *still* holding an
+unmatched bracket after the veto exceeds `--clean-orphan-brackets`'s own value
+(default `0.30`), the page is assumed to be code and the cleanup is skipped for
+that page entirely — nothing is touched, and JSON output reports
+`"bracket_cleanup": "skipped-code-gate"` so it's visible why. Pages shorter
+than `--clean-brackets-gate-min-lines` (default `5`) don't have enough of a
+sample for the gate to be meaningful, so they are always cleaned. Since the
+gate is evaluated fresh per image, running the flag across a batch that mixes
+forms and code screenshots is safe — each page is judged on its own.
+
+Measured on the reference documents, with no false positives left:
+
+| Document | Artifacts removed | Legitimate brackets kept |
+| --- | --- | --- |
+| `pagina2.png` | 6 | `Soles (S/.)`, `(marca una de las` … `siguientes opciones)` |
+| `preview.png` | 6 | `(Jun-2026)` |
+| `ANEXOSFMV0001.jpg` | 3 | `(S/)` ×2, `(meses)` ×2, `Cuota Inicial (S/` |
+
+```json
+{
+  "file": "form.png",
+  "detect_time_ms": 123.4,
+  "bracket_cleanup": "applied",
+  "lines": [ ... ]
+}
+```
 
 ## Engine selection: CPU vs OpenVINO
 

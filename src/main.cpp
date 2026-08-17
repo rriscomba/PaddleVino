@@ -15,6 +15,7 @@
 #include "EngineType.h"
 #include "CellDetector.h"
 #include "CheckboxDetector.h"
+#include "BracketCleaner.h"
 #include <opencv2/imgcodecs.hpp>
 #include <opencv2/imgproc.hpp>
 
@@ -62,6 +63,9 @@ struct Options {
     // --- diagnostics (off by default) ---
     std::string debugOverlay;
     bool debugCheckboxCandidates = false;
+
+    // --- orphan bracket cleanup (off by default) ---
+    BracketCleanupParams bracketParams;
 };
 
 // Per-page results produced by the optional detectors. Empty/disabled by
@@ -72,6 +76,7 @@ struct PageExtras {
     bool hasCheckboxes = false;
     CheckboxResult checkboxes;
     bool debugCandidates = false;
+    BracketCleanupResult bracketCleanup = BracketCleanupResult::Off;
 };
 
 void printHelp(FILE *out, const char *argv0) {
@@ -172,6 +177,11 @@ std::string resultToJson(const std::string &file, const OcrResult &result, bool 
         return out.str();
     }
     out << "\"detect_time_ms\":" << result.detectTime << ",";
+    if (extras.bracketCleanup != BracketCleanupResult::Off) {
+        out << "\"bracket_cleanup\":\""
+            << (extras.bracketCleanup == BracketCleanupResult::Applied ? "applied" : "skipped-code-gate")
+            << "\",";
+    }
     if (extras.hasCheckboxes) {
         // Result of the §6.4 gate: shows at a glance whether the rescue ran.
         out << "\"document_type\":\"" << (extras.checkboxes.isForm ? "form" : "text") << "\",";
@@ -655,6 +665,27 @@ int main(int argc, char **argv) {
         else if (arg == "--checkbox-ink-dark") opt.checkboxParams.inkDark = std::stoi(next("--checkbox-ink-dark"));
         else if (arg == "--debug-overlay") opt.debugOverlay = next("--debug-overlay");
         else if (arg == "--debug-checkbox-candidates") opt.debugCheckboxCandidates = true;
+        else if (arg == "--clean-orphan-brackets") {
+            opt.bracketParams.enabled = true;
+            // Optional value on the same flag (the gate ratio): only consume
+            // the next token if it parses as a number in full, so a
+            // following flag like "--detect-cells" is never swallowed.
+            if (i + 1 < argc) {
+                std::string val = argv[i + 1];
+                try {
+                    size_t consumed = 0;
+                    float ratio = std::stof(val, &consumed);
+                    if (consumed == val.size()) {
+                        opt.bracketParams.gateRatio = ratio;
+                        ++i;
+                    }
+                } catch (const std::exception &) {
+                    // Not numeric: leave the default ratio, don't consume it.
+                }
+            }
+        } else if (arg == "--clean-brackets-gate-min-lines")
+            opt.bracketParams.gateMinLines = std::stoi(next("--clean-brackets-gate-min-lines"));
+        else if (arg == "--clean-brackets-anywhere") opt.bracketParams.anywhere = true;
         else if (arg == "--version" || arg == "-v") {
             printf("%s\n", VERSION);
             return 0;
@@ -764,13 +795,25 @@ int main(int argc, char **argv) {
             error = e.what();
         }
 
+        PageExtras extras;
+        if (ok && opt.bracketParams.enabled) {
+            // Runs on the raw OCR text, before any synthetic checkbox
+            // TextBlock exists (those are only injected later in
+            // buildReadingBlocks for --format reading), so "[x]"/"[ ]" never
+            // needs an explicit exemption from the balance check.
+            std::vector<std::string> lines;
+            lines.reserve(result.textBlocks.size());
+            for (const TextBlock &b: result.textBlocks) lines.push_back(b.text);
+            extras.bracketCleanup = cleanOrphanBrackets(lines, opt.bracketParams);
+            for (size_t bi = 0; bi < result.textBlocks.size(); ++bi) result.textBlocks[bi].text = lines[bi];
+        }
+
         // The optional detectors work on the source pixels, but
         // OcrLite::detect() takes paths and does not hand the decoded image
         // back, so the page is read once more here. TextBlock::boxPoint is
         // already in original-image coordinates (the engine reverts both the
         // padding and the maxSideLen resize), so no transform is needed to
         // put OCR boxes and CV boxes in the same space.
-        PageExtras extras;
         const bool needsPixels = opt.detectCellsEnabled || opt.detectCheckboxesEnabled || !opt.debugOverlay.empty();
         if (ok && needsPixels) {
             cv::Mat pageBgr = cv::imread(imgPath, cv::IMREAD_COLOR);

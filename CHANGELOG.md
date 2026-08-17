@@ -33,6 +33,25 @@
   ink. Every calibrated constant is a flag; `--checkbox-profile
   strict|balanced|aggressive` gives presets, and any explicit flag overrides
   the profile.
+- **New: orphan bracket cleanup** (`--clean-orphan-brackets [ratio]`). Strips
+  unmatched `()[]{}` from OCR text per line — the fix for cell borders
+  misread as `[` (e.g. `Nombre[`) without cropping the image, so it doesn't
+  lose characters the way border-masking did in testing. Runs before
+  checkboxes are injected into `--format reading`, so `[x]`/`[ ]` never need
+  an exemption. Three safeguards, each added because a reference document
+  broke the simpler version: a **per-kind page-level veto** keeps a pair that
+  legitimately spans two lines (`(marca una de las` / `siguientes opciones)`
+  on `pagina2.png`, which the naive per-line rule deleted); an **edge
+  restriction** only removes brackets at the start/end of a run, where the
+  border artifact always lands, sparing real text whose partner the OCR
+  dropped (`Cuota Inicial (S/` on `ANEXOSFMV0001.jpg`) unless
+  `--clean-brackets-anywhere` is passed; and a **frequency gate** that skips
+  the page entirely when unmatched brackets still dominate after the veto
+  (`[ratio]`, default `0.30`), which is how a scanned source-code page is
+  left alone (`--clean-brackets-gate-min-lines`, default `5`, sets the
+  minimum sample size). Adds `bracket_cleanup` (`"applied"` /
+  `"skipped-code-gate"`) to the JSON when the flag is used. Measured on the
+  reference forms: 6 / 6 / 3 artifacts removed with **0** false positives.
 - **New: diagnostics.** `--debug-overlay <file>` writes the page with the
   detected boxes drawn on it (checkboxes green/red with their ink ratio and
   confidence, cells in blue); `--debug-checkbox-candidates` also emits the
