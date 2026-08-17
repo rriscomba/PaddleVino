@@ -116,6 +116,13 @@ jobs:
           # the exact failure this bundling is meant to prevent, so a missing
           # model must fail the build instead of producing a broken package.
           Copy-Item models/checkbox.onnx "$pkg/models/"
+          # The fetch scripts ship too. Nothing in the zip needs them -- every
+          # model is already staged above -- but they are what lets someone
+          # who only has the package re-fetch a deleted model or switch
+          # -Tier, without cloning the repository to get a 3 KB script. Both
+          # resolve their own directory ($PSScriptRoot / BASH_SOURCE), so
+          # they work unchanged from inside the package.
+          Copy-Item models/download_models.ps1, models/download_models.sh "$pkg/models/"
           Copy-Item README.md $pkg/ -ErrorAction SilentlyContinue
           Copy-Item CHANGELOG.md $pkg/ -ErrorAction SilentlyContinue
           Copy-Item LICENSE $pkg/ -ErrorAction SilentlyContinue
