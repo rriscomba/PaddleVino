@@ -13,10 +13,10 @@ void DbNet::setGpuIndex(int gpuIndex) {
         cuda_options.do_copy_in_default_stream = 1;
 
         sessionOptions.AppendExecutionProvider_CUDA(cuda_options);
-        printf("det try to use GPU%d\n", gpuIndex);
+        fprintf(stderr, "det try to use GPU%d\n", gpuIndex);
     }
     else {
-        printf("det use CPU\n");
+        fprintf(stderr, "det use CPU\n");
     }
 #endif
 }
@@ -28,9 +28,9 @@ void DbNet::setEngine(EngineType engine) {
     try {
         std::unordered_map<std::string, std::string> options;
         sessionOptions.AppendExecutionProvider("OpenVINO", options);
-        printf("det: using OpenVINO execution provider\n");
+        fprintf(stderr, "det: using OpenVINO execution provider\n");
     } catch (const Ort::Exception &e) {
-        printf("det: OpenVINO execution provider unavailable (%s), falling back to CPU\n", e.what());
+        fprintf(stderr, "det: OpenVINO execution provider unavailable (%s), falling back to CPU\n", e.what());
     }
 }
 
