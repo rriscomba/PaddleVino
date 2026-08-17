@@ -18,20 +18,20 @@ void AngleNet::setGpuIndex(int gpuIndex) {
         cuda_options.do_copy_in_default_stream = 1;
 
         sessionOptions.AppendExecutionProvider_CUDA(cuda_options);
-        printf("cls try to use GPU%d\n", gpuIndex);
+        fprintf(stderr, "cls try to use GPU%d\n", gpuIndex);
     }
     else {
-        printf("cls use CPU\n");
+        fprintf(stderr, "cls use CPU\n");
     }
 #endif
 
 #ifdef __DIRECTML__
     if (gpuIndex >= 0) {
         OrtSessionOptionsAppendExecutionProvider_DML(sessionOptions, gpuIndex);
-        printf("cls try to use GPU%d\n", gpuIndex);
+        fprintf(stderr, "cls try to use GPU%d\n", gpuIndex);
     }
     else {
-        printf("cls use CPU\n");
+        fprintf(stderr, "cls use CPU\n");
     }
 #endif
 }
@@ -43,9 +43,9 @@ void AngleNet::setEngine(EngineType engine) {
     try {
         std::unordered_map<std::string, std::string> options;
         sessionOptions.AppendExecutionProvider("OpenVINO", options);
-        printf("cls: using OpenVINO execution provider\n");
+        fprintf(stderr, "cls: using OpenVINO execution provider\n");
     } catch (const Ort::Exception &e) {
-        printf("cls: OpenVINO execution provider unavailable (%s), falling back to CPU\n", e.what());
+        fprintf(stderr, "cls: OpenVINO execution provider unavailable (%s), falling back to CPU\n", e.what());
     }
 }
 

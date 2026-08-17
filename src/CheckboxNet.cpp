@@ -12,9 +12,9 @@ void CheckboxNet::setEngine(EngineType engine) {
     try {
         std::unordered_map<std::string, std::string> options;
         sessionOptions.AppendExecutionProvider("OpenVINO", options);
-        printf("checkbox: using OpenVINO execution provider\n");
+        fprintf(stderr, "checkbox: using OpenVINO execution provider\n");
     } catch (const Ort::Exception &e) {
-        printf("checkbox: OpenVINO execution provider unavailable (%s), falling back to CPU\n", e.what());
+        fprintf(stderr, "checkbox: OpenVINO execution provider unavailable (%s), falling back to CPU\n", e.what());
     }
 }
 
