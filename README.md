@@ -244,7 +244,9 @@ around `0.25` in the prototype. The global default stays at `0.5` so plain
 `--detect-checkboxes` needs a YOLO checkbox model (`checkbox.onnx` in
 `--models-dir` by default). The release zip ships it, so nothing extra is
 needed there; building from source fetches it with the other models via
-`models/download_models.ps1`. The work is split between two very
+`models/download_models.ps1`. If you ever need to put it back — or switch
+model tier — the zip carries those same scripts under `models/`, so you
+can re-fetch without cloning anything. The work is split between two very
 different mechanisms, because each is good at exactly what the other is bad
 at:
 
