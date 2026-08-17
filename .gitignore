@@ -79,3 +79,9 @@ models/ppocrv6_dict.txt
 dist/
 third_party/onnxruntime/
 third_party_extract/
+# Intermediates of the ONNX Runtime + OpenVINO fetch (see the "Fetch ONNX
+# Runtime" step in .github/workflows/build-windows.yml); reproducing that
+# step locally leaves these behind in the working tree.
+ort_openvino.nupkg
+ort_openvino.zip
+ort_openvino_extract/
