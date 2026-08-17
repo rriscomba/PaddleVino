@@ -83,8 +83,8 @@ BracketCleanupResult cleanOrphanBrackets(std::vector<std::string> &lines, const 
     }
 
     // Page-level veto, per bracket kind. A pair that legitimately spans two
-    // lines -- "Tipo de Movilidad (marca una de las" / "siguientes opciones)",
-    // measured on a real form -- looks orphan to the per-line check on both
+    // lines -- "Preferred Contact Method (select one of the" / "following
+    // options)", measured on a real form -- looks orphan to the per-line check on both
     // lines, and stripping it would corrupt good text. So if a kind has BOTH
     // an unmatched open and an unmatched close somewhere on the page, its
     // candidates are most likely two halves of such a pair: keep them all.
@@ -107,10 +107,10 @@ BracketCleanupResult cleanOrphanBrackets(std::vector<std::string> &lines, const 
             if (!removals[i][j]) continue;
             // Edge restriction: the artifact is a cell border that fell inside
             // the detected box, so it lands at one end of the run -- measured,
-            // every real one does ("DNI[" trailing, "]Casa" leading). An
+            // every real one does ("ID[" trailing, "]Address" leading). An
             // unmatched bracket in the middle is far more likely to be real
-            // text whose partner the OCR simply dropped ("... Cuota Inicial
-            // (S/", where the ")" was lost), so it is left alone.
+            // text whose partner the OCR simply dropped ("... Amount Due
+            // ($", where the ")" was lost), so it is left alone.
             const bool atEdge = (j == 0) || (j + 1 == lines[i].size());
             if (vetoed[kindOf(lines[i][j])] || (!params.anywhere && !atEdge)) {
                 removals[i][j] = false;

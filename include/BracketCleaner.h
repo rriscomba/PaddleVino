@@ -4,22 +4,22 @@
 #include <string>
 #include <vector>
 
-// Removes OCR noise like "Nombre[" (a cell border misread as a bracket)
+// Removes OCR noise like "Name[" (a cell border misread as a bracket)
 // without touching the image crop: in office text, ()[]{} should always come
 // balanced, so an unmatched one on a line is treated as noise and dropped.
 //
 // Three safeguards keep that from eating legitimate text:
 //
 //  * an edge restriction -- the artifact is a cell border caught inside the
-//    detected box, so it sits at one end of the run ("DNI[", "]Casa"); an
+//    detected box, so it sits at one end of the run ("ID[", "]Address"); an
 //    unmatched bracket in the middle is more likely real text whose partner
 //    the OCR dropped, and is left alone unless BracketCleanupParams::anywhere;
 //  * a per-kind page-level veto -- a pair that genuinely spans two lines
-//    ("Tipo de Movilidad (marca una de las" / "siguientes opciones)", measured
-//    on a real form) looks orphan on both lines, so if a bracket kind has an
-//    unmatched open AND an unmatched close on the page, nothing of that kind
-//    is touched. The real artifact has no partner anywhere on the page, which
-//    is exactly what survives the veto;
+//    ("Preferred Contact Method (select one of the" / "following options)",
+//    measured on a real form) looks orphan on both lines, so if a bracket
+//    kind has an unmatched open AND an unmatched close on the page, nothing
+//    of that kind is touched. The real artifact has no partner anywhere on
+//    the page, which is exactly what survives the veto;
 //  * a page-level frequency gate -- a source-code page breaks the "always
 //    balanced" assumption on purpose ("{" alone at the end of a line, "}"
 //    alone on the next), so the cleanup bails out entirely when unmatched
@@ -36,8 +36,8 @@ struct BracketCleanupParams {
     bool enabled = false;
     // Fraction of lines still holding an unmatched bracket after the per-kind
     // veto, above which the page is assumed to be source code and the cleanup
-    // is skipped entirely. Measured on a real form (pagina2.png): 6 artifacts
-    // over 46 runs = 0.13, so this leaves usable headroom above that.
+    // is skipped entirely. Measured on a real form (sample-form-1.png): 6
+    // artifacts over 46 runs = 0.13, so this leaves usable headroom above that.
     float gateRatio = 0.30f;
     // Minimum number of lines for the gate to apply; short pages don't have
     // enough of a sample and are always cleaned.

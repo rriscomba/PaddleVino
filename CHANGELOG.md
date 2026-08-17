@@ -35,16 +35,16 @@
   the profile.
 - **New: orphan bracket cleanup** (`--clean-orphan-brackets [ratio]`). Strips
   unmatched `()[]{}` from OCR text per line — the fix for cell borders
-  misread as `[` (e.g. `Nombre[`) without cropping the image, so it doesn't
+  misread as `[` (e.g. `Name[`) without cropping the image, so it doesn't
   lose characters the way border-masking did in testing. Runs before
   checkboxes are injected into `--format reading`, so `[x]`/`[ ]` never need
   an exemption. Three safeguards, each added because a reference document
   broke the simpler version: a **per-kind page-level veto** keeps a pair that
-  legitimately spans two lines (`(marca una de las` / `siguientes opciones)`
-  on `pagina2.png`, which the naive per-line rule deleted); an **edge
+  legitimately spans two lines (`(select one of the` / `following options)`
+  on `sample-form-1.png`, which the naive per-line rule deleted); an **edge
   restriction** only removes brackets at the start/end of a run, where the
   border artifact always lands, sparing real text whose partner the OCR
-  dropped (`Cuota Inicial (S/` on `ANEXOSFMV0001.jpg`) unless
+  dropped (`Amount Due ($` on `sample-form-3.jpg`) unless
   `--clean-brackets-anywhere` is passed; and a **frequency gate** that skips
   the page entirely when unmatched brackets still dominate after the veto
   (`[ratio]`, default `0.30`), which is how a scanned source-code page is
